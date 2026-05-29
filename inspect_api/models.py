@@ -123,9 +123,23 @@ class Artifact(models.Model):
         OUTPUT_MTZ = "output_mtz", "Output / Z-map MTZ"
         EVENT_MAP = "event_map", "Event map"
         LIGAND = "ligand", "Ligand dictionary"
+        REPORT_HTML = "report_html", "HTML report"
 
+    # Project-level artifacts (e.g. report HTML) attach to the project with no
+    # dataset; dataset/event artifacts set the relevant FK.
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="artifacts",
+        null=True,
+        blank=True,
+    )
     dataset = models.ForeignKey(
-        Dataset, on_delete=models.CASCADE, related_name="artifacts"
+        Dataset,
+        on_delete=models.CASCADE,
+        related_name="artifacts",
+        null=True,
+        blank=True,
     )
     # Optional link to a specific event (event maps belong to an event).
     event = models.ForeignKey(
@@ -135,14 +149,21 @@ class Artifact(models.Model):
         null=True,
         blank=True,
     )
-    kind = models.CharField(max_length=16, choices=Kind.choices)
+    kind = models.CharField(max_length=20, choices=Kind.choices)
     relpath = models.CharField(max_length=1024)
 
     class Meta:
-        ordering = ["dataset__dtag", "kind"]
+        ordering = ["kind", "relpath"]
+
+    @property
+    def owning_project(self):
+        """The Project this artifact belongs to, whether attached directly
+        (project-level, e.g. reports) or via its dataset."""
+        return self.project or (self.dataset.project if self.dataset else None)
 
     def __str__(self):
-        return f"{self.dataset.dtag}:{self.kind}:{self.relpath}"
+        scope = self.dataset.dtag if self.dataset else "project"
+        return f"{scope}:{self.kind}:{self.relpath}"
 
 
 class Shell(models.Model):

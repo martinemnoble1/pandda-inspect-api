@@ -89,6 +89,7 @@ class Command(BaseCommand):
             relpath = emaps.get(str(ev.get("event_num")))
             if relpath:
                 Artifact.objects.create(
+                    project=project,
                     dataset=ds,
                     event=event,
                     kind=Artifact.Kind.EVENT_MAP,
@@ -108,16 +109,33 @@ class Command(BaseCommand):
                 rel = files.get(key)
                 if rel:
                     Artifact.objects.create(
-                        dataset=ds, kind=kind, relpath=self._norm(rel)
+                        project=project,
+                        dataset=ds,
+                        kind=kind,
+                        relpath=self._norm(rel),
                     )
                     n_artifacts += 1
             for lig in files.get("ligands", []) or []:
                 Artifact.objects.create(
+                    project=project,
                     dataset=ds,
                     kind=Artifact.Kind.LIGAND,
                     relpath=self._norm(lig),
                 )
                 n_artifacts += 1
+
+        # Project-level report HTMLs (from output_files.html) — for the
+        # dashboard's embedded iframe panel.
+        n_reports = 0
+        html_map = data.get("output_files", {}).get("html", {}) or {}
+        for rel in html_map.values():
+            if rel:
+                Artifact.objects.create(
+                    project=project,
+                    kind=Artifact.Kind.REPORT_HTML,
+                    relpath=self._norm(rel),
+                )
+                n_reports += 1
 
         n_shells = 0
         for sh in data.get("shell_records", []):
@@ -136,7 +154,8 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Ingested '{name}': {len(datasets)} datasets, {n_events} "
-                f"events, {n_artifacts} artifacts, {n_shells} shells."
+                f"events, {n_artifacts} artifacts, {n_reports} reports, "
+                f"{n_shells} shells."
             )
         )
 

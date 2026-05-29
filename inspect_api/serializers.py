@@ -10,7 +10,10 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Artifact
-        fields = ["id", "kind", "relpath", "event", "download_url"]
+        fields = [
+            "id", "kind", "relpath", "project", "dataset", "event",
+            "download_url",
+        ]
 
     @extend_schema_field(serializers.CharField())
     def get_download_url(self, obj):
@@ -91,10 +94,37 @@ class ShellSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
-    n_datasets = serializers.IntegerField(
-        source="datasets.count", read_only=True
-    )
+    # Status summary computed from the related rows — the dashboard headline.
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
-        fields = ["id", "name", "source_root", "ingested_at", "n_datasets"]
+        fields = ["id", "name", "source_root", "ingested_at", "status"]
+
+    @extend_schema_field(serializers.JSONField())
+    def get_status(self, obj):
+        from .models import Event
+
+        n_datasets = obj.datasets.count()
+        events = Event.objects.filter(dataset__project=obj)
+        n_events = events.count()
+        n_hits = events.filter(decision=Event.Decision.HIT).count()
+        n_reviewed = events.exclude(
+            decision=Event.Decision.UNREVIEWED
+        ).count()
+        n_sites = (
+            events.exclude(site_num__isnull=True)
+            .values("site_num")
+            .distinct()
+            .count()
+        )
+        return {
+            "analysed": n_events > 0,
+            "n_datasets": n_datasets,
+            "n_events": n_events,
+            "n_sites": n_sites,
+            "n_hits": n_hits,
+            "n_reviewed": n_reviewed,
+            # Hit rate over reviewed events (None until any review happens).
+            "hit_rate": (n_hits / n_reviewed) if n_reviewed else None,
+        }
