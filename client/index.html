@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PanDDA Inspect</title>
+    <!-- RDKit (2D ligand rendering) on the main thread -->
+    <script src="/RDKit_minimal.js"></script>
+    <script>
+      // Bootstrap Coot/Moorhen WASM, then signal readiness via cootModuleAttached.
+      window.onload = () => {
+        if (!crossOriginIsolated) window.SharedArrayBuffer = ArrayBuffer;
+
+        const loadScript = (src) =>
+          new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = src;
+            s.onload = () => resolve(src);
+            s.onerror = () => reject(new Error("Failed to load " + src));
+            document.head.appendChild(s);
+          });
+
+        const attach = (mod) => {
+          window.cootModule = mod;
+          window.CCP4Module = mod;
+          document.dispatchEvent(new CustomEvent("cootModuleAttached", {}));
+        };
+
+        const memory64 = WebAssembly.validate(
+          new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 4, 1])
+        );
+        const start64 = () =>
+          loadScript("/MoorhenAssets/wasm/moorhen64.js").then(() =>
+            window.createCoot64Module({
+              print: (t) => console.log(["output", t]),
+              printErr: (t) => console.error(["output", t]),
+            }).then(attach)
+          );
+        const start32 = () =>
+          loadScript("/MoorhenAssets/wasm/moorhen.js").then(() =>
+            window.createCootModule({
+              print: (t) => console.log(["output", t]),
+              printErr: (t) => console.log(["output", t]),
+            }).then(attach)
+          );
+
+        (memory64 ? start64().catch(start32) : start32()).catch((e) =>
+          console.error("Coot module load failed", e)
+        );
+
+        try {
+          window.initRDKitModule().then((rdkit) => {
+            window.RDKit = rdkit;
+          });
+        } catch (e) {
+          console.error("RDKit load failed", e);
+        }
+      };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

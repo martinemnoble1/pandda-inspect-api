@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.local
+
+# Moorhen / RDKit assets are generated into public/ by `npm run copy:assets`
+# (from the moorhen tgz and @rdkit). Not checked in.
+public/baby-gru/
+public/RDKit_minimal.js
+public/RDKit_minimal.wasm

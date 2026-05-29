@@ -148,7 +148,7 @@ class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):
     @extend_schema(
         responses={
             200: OpenApiResponse(description="Raw artifact bytes streamed."),
-            404: OpenApiResponse(description="Artifact file not found on disk."),
+            404: OpenApiResponse(description="Artifact not on disk."),
         }
     )
     @action(detail=True, methods=["get"])
