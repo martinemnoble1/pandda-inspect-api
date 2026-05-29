@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import Artifact, Dataset, Event, Project, Shell
@@ -11,6 +12,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
         model = Artifact
         fields = ["id", "kind", "relpath", "event", "download_url"]
 
+    @extend_schema_field(serializers.CharField())
     def get_download_url(self, obj):
         return f"/api/v1/artifacts/{obj.id}/download/"
 

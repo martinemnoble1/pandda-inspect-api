@@ -53,6 +53,13 @@ REST_FRAMEWORK = {
         "rest_framework.pagination.LimitOffsetPagination"
     ),
     "PAGE_SIZE": 100,
+    # This thin reference deliberately omits django.contrib.auth from
+    # INSTALLED_APPS, so disable DRF's auth/permission machinery (which would
+    # otherwise pull in AnonymousUser -> auth models). Auth is a deployment
+    # concern layered on later, not part of the contract demo.
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "DEFAULT_PERMISSION_CLASSES": [],
+    "UNAUTHENTICATED_USER": None,
 }
 
 SPECTACULAR_SETTINGS = {

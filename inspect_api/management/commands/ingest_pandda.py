@@ -126,8 +126,8 @@ class Command(BaseCommand):
                 label=sh.get("label", ""),
                 resolution_high=sh.get("resolution_high"),
                 resolution_low=sh.get("resolution_low"),
-                map_resolution=sh.get("map_resolution"),
-                map_uncertainty=sh.get("map_uncertainty"),
+                map_resolution=self._scalar(sh.get("map_resolution")),
+                map_uncertainty=self._scalar(sh.get("map_uncertainty")),
                 n_train=len(sh.get("train", [])),
                 n_test=len(sh.get("test", [])),
             )
@@ -141,6 +141,12 @@ class Command(BaseCommand):
         )
 
     # --- helpers ---
+
+    @staticmethod
+    def _scalar(val):
+        """Accept only a scalar number; PanDDA sometimes nests a dtag-keyed
+        dict where a single value is expected (e.g. shell map_uncertainty)."""
+        return val if isinstance(val, (int, float)) else None
 
     @staticmethod
     def _rec(records, key, dtag):
