@@ -29,6 +29,17 @@ MIDDLEWARE = [
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
+# App-dirs template loading so DRF / drf-spectacular can find their templates
+# (the Swagger UI at /api/docs/ needs this).
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": []},
+    }
+]
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
