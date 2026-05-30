@@ -275,24 +275,65 @@ export function InspectDrawer({
                     {g.subtitle ? `${g.subtitle} · ` : ""}
                     {summarise(g.events)}
                   </Typography>
-                  {g.dataset && (
-                    <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                      {g.dataset.analysed_resolution != null && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={`res ${g.dataset.analysed_resolution}`}
-                        />
-                      )}
-                      {g.dataset.r_free != null && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={`Rfree ${g.dataset.r_free.toFixed(3)}`}
-                        />
-                      )}
-                    </Stack>
-                  )}
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{ mt: 0.5 }}
+                    flexWrap="wrap"
+                    useFlexGap
+                  >
+                    {(() => {
+                      // Triage signals computed from the group's events.
+                      const nHits = g.events.filter(
+                        (e) => e.decision === "hit"
+                      ).length;
+                      const topFrac = g.events.reduce<number | null>(
+                        (m, e) =>
+                          e.event_fraction != null
+                            ? Math.max(m ?? 0, e.event_fraction)
+                            : m,
+                        null
+                      );
+                      return (
+                        <>
+                          {nHits > 0 && (
+                            <Chip
+                              size="small"
+                              color="success"
+                              label={`${nHits} hit${nHits === 1 ? "" : "s"}`}
+                            />
+                          )}
+                          {topFrac != null && (
+                            <Tooltip
+                              title="Highest event fraction in this dataset — a quick measure of the strongest event"
+                              arrow
+                            >
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={topFrac >= 0.4 ? "primary" : "default"}
+                                label={`top ${Math.round(topFrac * 100)}%`}
+                              />
+                            </Tooltip>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {g.dataset?.analysed_resolution != null && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={`res ${g.dataset.analysed_resolution}`}
+                      />
+                    )}
+                    {g.dataset?.r_free != null && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={`Rfree ${g.dataset.r_free.toFixed(3)}`}
+                      />
+                    )}
+                  </Stack>
                 </Box>
               </AccordionSummary>
               <AccordionDetails>
