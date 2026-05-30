@@ -70,13 +70,8 @@ export function InspectDrawer({
       .catch(() => setDatasets([]));
   }, [projectName]);
 
-  const clearLoaded = useCallback(async () => {
-    const molecules: any[] =
-      (store.getState() as any).molecules.moleculeList ?? [];
-    for (const m of molecules) {
-      await m.delete();
-      dispatch(removeMolecule(m));
-    }
+  // Delete every map currently in the store (state.maps is an array in 0.23).
+  const clearMaps = useCallback(async () => {
     const maps: any[] = (store.getState() as any).maps ?? [];
     for (const mp of maps) {
       await mp.delete();
@@ -84,6 +79,17 @@ export function InspectDrawer({
     }
     eventMapRef.current = null;
   }, [dispatch]);
+
+  // Full teardown: maps + molecules. Used when switching dataset.
+  const clearLoaded = useCallback(async () => {
+    await clearMaps();
+    const molecules: any[] =
+      (store.getState() as any).molecules.moleculeList ?? [];
+    for (const m of molecules) {
+      await m.delete();
+      dispatch(removeMolecule(m));
+    }
+  }, [dispatch, clearMaps]);
 
   const loadEvent = useCallback(
     async (ev: PanddaEvent) => {
@@ -94,6 +100,7 @@ export function InspectDrawer({
       setLoadingId(ev.id);
       try {
         if (loadedDtag.current !== ev.dtag) {
+          // New dataset: tear down everything and (re)load its model.
           await clearLoaded();
           loadedDtag.current = ev.dtag;
 
@@ -104,6 +111,10 @@ export function InspectDrawer({
             await mol.addRepresentation("CBs", "/*/*");
             dispatch(addMolecule(mol as any));
           }
+        } else {
+          // Same dataset, different event: keep the model, but drop the old
+          // event map so maps don't accumulate as you step through events.
+          await clearMaps();
         }
 
         const emap = artifactOf(ev, "event_map");
@@ -131,7 +142,7 @@ export function InspectDrawer({
         setLoadingId(null);
       }
     },
-    [glRef, commandCentre, cootInitialized, dispatch, clearLoaded]
+    [glRef, commandCentre, cootInitialized, dispatch, clearLoaded, clearMaps]
   );
 
   const onContour = useCallback((_: Event, v: number | number[]) => {
