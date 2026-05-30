@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useDispatch } from "react-redux";
 import { addMap, addMolecule, removeMap, removeMolecule } from "moorhen";
 import type { moorhen } from "moorhen/types/moorhen";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Box,
   Chip,
   CircularProgress,
   Divider,
-  List,
-  ListItemButton,
-  ListItemText,
   Slider,
   Stack,
   TextField,
@@ -18,6 +18,7 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import store from "../store";
 import {
   newMap,
@@ -26,7 +27,9 @@ import {
   setActiveMap,
   type MoorhenMapLike,
 } from "../moorhen-shim";
-import { api, type Artifact, type PanddaEvent } from "../api";
+import { api, type Artifact, type Dataset, type PanddaEvent } from "../api";
+import { groupEvents, summarise, type GroupAxis } from "../grouping";
+import { MolViewer } from "./MolViewer";
 
 interface Props {
   projectName: string;
@@ -38,6 +41,9 @@ interface Props {
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
 
+const decisionColour = (d: string) =>
+  d === "hit" ? "success" : d === "no_hit" ? "error" : "default";
+
 export function InspectDrawer({
   projectName,
   glRef,
@@ -45,8 +51,11 @@ export function InspectDrawer({
   cootInitialized,
 }: Props) {
   const dispatch = useDispatch();
-  const [events, setEvents] = useState<PanddaEvent[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [axis, setAxis] = useState<GroupAxis>("dataset");
   const [search, setSearch] = useState("");
+  const [hitsOnly, setHitsOnly] = useState(true);
+  const [expanded, setExpanded] = useState<string | false>(false);
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [selected, setSelected] = useState<PanddaEvent | null>(null);
   const [contour, setContour] = useState(1.0);
@@ -56,9 +65,9 @@ export function InspectDrawer({
   useEffect(() => {
     if (!projectName) return;
     api
-      .listEvents(projectName)
-      .then((d) => setEvents(d.results))
-      .catch(() => setEvents([]));
+      .listDatasets(projectName)
+      .then((d) => setDatasets(d.results))
+      .catch(() => setDatasets([]));
   }, [projectName]);
 
   const clearLoaded = useCallback(async () => {
@@ -78,8 +87,6 @@ export function InspectDrawer({
 
   const loadEvent = useCallback(
     async (ev: PanddaEvent) => {
-      // Coot must be fully initialised: commandCentre.current exists early but
-      // its cootCommand isn't wired until cootInitialized flips true.
       const cc = commandCentre.current as
         | (moorhen.CommandCentre & { cootCommand?: unknown })
         | null;
@@ -92,12 +99,8 @@ export function InspectDrawer({
 
           const struct = artifactOf(ev, "structure");
           if (struct) {
-            // Pass the ref, not .current — Moorhen reads commandCentre.current
-            // internally.
             const mol = newMolecule(commandCentre, store);
             await mol.loadToCootFromURL(api.artifactUrl(struct), ev.dtag);
-            // Representation before dispatch: 0.23's sequence viewer reads
-            // representations[0] for any molecule with a sequence.
             await mol.addRepresentation("CBs", "/*/*");
             dispatch(addMolecule(mol as any));
           }
@@ -106,12 +109,11 @@ export function InspectDrawer({
         const emap = artifactOf(ev, "event_map");
         if (emap) {
           const map = newMap(commandCentre, store);
-          await map.loadToCootFromMtzURL(api.artifactUrl(emap), `${ev.dtag}-EVENT`, {
-            F: "FEVENT",
-            PHI: "PHEVENT",
-            useWeight: false,
-            isDifference: false,
-          });
+          await map.loadToCootFromMtzURL(
+            api.artifactUrl(emap),
+            `${ev.dtag}-EVENT`,
+            { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false }
+          );
           dispatch(addMap(map as any));
           dispatch(setActiveMap(map));
           eventMapRef.current = map;
@@ -142,32 +144,70 @@ export function InspectDrawer({
     }
   }, []);
 
-  const setDecision = useCallback(async (ev: PanddaEvent, decision: string) => {
-    const updated = await api.setDecision(ev.id, { decision });
-    setEvents((prev) =>
-      prev.map((e) => (e.id === ev.id ? { ...e, ...updated } : e))
-    );
-    setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
-  }, []);
-
-  const filtered = events.filter(
-    (e) =>
-      search.trim() === "" ||
-      e.dtag.toLowerCase().includes(search.toLowerCase())
+  const setDecision = useCallback(
+    async (ev: PanddaEvent, decision: string) => {
+      const updated = await api.setDecision(ev.id, { decision });
+      setDatasets((prev) =>
+        prev.map((ds) => ({
+          ...ds,
+          events: ds.events.map((e) =>
+            e.id === ev.id ? { ...e, ...updated } : e
+          ),
+        }))
+      );
+      setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
+    },
+    []
   );
+
+  // The dataset whose event is currently live in Moorhen — its ligand sketch
+  // is the one worth showing (detail tied to "what am I looking at").
+  const liveDataset = useMemo(
+    () =>
+      selected
+        ? datasets.find((d) => d.dtag === selected.dtag) ?? null
+        : null,
+    [selected, datasets]
+  );
+  const liveLigand = liveDataset?.artifacts.find((a) => a.kind === "ligand");
+
+  const groups = useMemo(() => {
+    const withEvents = hitsOnly
+      ? datasets.filter((d) => d.events.length > 0)
+      : datasets;
+    const grouped = groupEvents(withEvents, axis);
+    const q = search.trim().toLowerCase();
+    if (!q) return grouped;
+    return grouped.filter(
+      (g) =>
+        g.title.toLowerCase().includes(q) ||
+        g.subtitle?.toLowerCase().includes(q)
+    );
+  }, [datasets, axis, hitsOnly, search]);
 
   return (
     <Box
-      sx={{
-        width: 360,
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-      }}
+      sx={{ width: 380, height: "100%", display: "flex", flexDirection: "column" }}
     >
-      {/* Top: searchable event list */}
+      {/* Controls */}
       <Box sx={{ p: 1, flexShrink: 0 }}>
-        <Typography variant="subtitle1">Events — {projectName}</Typography>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Typography variant="subtitle1">{projectName}</Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={axis}
+            onChange={(_, v) => v && setAxis(v)}
+          >
+            <ToggleButton value="dataset">Dataset</ToggleButton>
+            <ToggleButton value="site">Site</ToggleButton>
+          </ToggleButtonGroup>
+        </Stack>
         {!cootInitialized && (
           <Typography variant="caption" color="text.secondary">
             Waiting for Moorhen to finish loading…
@@ -176,48 +216,117 @@ export function InspectDrawer({
         <TextField
           size="small"
           fullWidth
-          placeholder="Filter by dtag…"
+          placeholder={axis === "dataset" ? "Filter datasets…" : "Filter sites…"}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           sx={{ mt: 1 }}
         />
-      </Box>
-      <Box sx={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        <List dense disablePadding>
-          {filtered.map((ev) => (
-            <ListItemButton
-              key={ev.id}
-              divider
-              disabled={!cootInitialized}
-              selected={selected?.id === ev.id}
-              onClick={() => loadEvent(ev)}
-            >
-              <ListItemText
-                primary={`${ev.dtag} · event ${ev.event_num}`}
-                secondary={`BDC ${ev.bdc ?? "—"} · Z ${
-                  ev.z_peak?.toFixed(1) ?? "—"
-                }`}
-              />
-              {loadingId === ev.id && <CircularProgress size={16} />}
-              {ev.decision !== "unreviewed" && (
-                <Chip
-                  size="small"
-                  label={ev.decision}
-                  color={
-                    ev.decision === "hit"
-                      ? "success"
-                      : ev.decision === "no_hit"
-                      ? "error"
-                      : "default"
-                  }
-                />
-              )}
-            </ListItemButton>
-          ))}
-        </List>
+        <Box sx={{ mt: 0.5 }}>
+          <Chip
+            size="small"
+            label={hitsOnly ? "With events only" : "All datasets"}
+            onClick={() => setHitsOnly((v) => !v)}
+            variant={hitsOnly ? "filled" : "outlined"}
+            color={hitsOnly ? "primary" : "default"}
+          />
+        </Box>
       </Box>
 
-      {/* Bottom: fixed 300px detail + contour panel for the selected event */}
+      {/* Grouped accordion */}
+      <Box sx={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+        {groups.map((g) => {
+          const isLiveGroup =
+            axis === "dataset" && selected?.dtag === g.key;
+          return (
+            <Accordion
+              key={g.key}
+              disableGutters
+              expanded={expanded === g.key}
+              onChange={(_, isOpen) => setExpanded(isOpen ? g.key : false)}
+            >
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Box sx={{ width: "100%" }}>
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    alignItems="center"
+                    flexWrap="wrap"
+                  >
+                    <Typography sx={{ fontWeight: 600 }}>{g.title}</Typography>
+                    {isLiveGroup && (
+                      <Chip size="small" color="warning" label="viewing" />
+                    )}
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary">
+                    {g.subtitle ? `${g.subtitle} · ` : ""}
+                    {summarise(g.events)}
+                  </Typography>
+                  {g.dataset && (
+                    <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+                      {g.dataset.analysed_resolution != null && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={`res ${g.dataset.analysed_resolution}`}
+                        />
+                      )}
+                      {g.dataset.r_free != null && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={`Rfree ${g.dataset.r_free.toFixed(3)}`}
+                        />
+                      )}
+                    </Stack>
+                  )}
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails>
+                {/* Ligand sketch only for the dataset currently live in Moorhen */}
+                {isLiveGroup && liveLigand && (
+                  <Box sx={{ mb: 1, textAlign: "center" }}>
+                    <MolViewer cifUrl={api.artifactUrl(liveLigand)} />
+                  </Box>
+                )}
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {g.events.map((ev) => (
+                    <Chip
+                      key={ev.id}
+                      clickable={cootInitialized}
+                      disabled={!cootInitialized}
+                      onClick={() => loadEvent(ev)}
+                      color={
+                        selected?.id === ev.id
+                          ? "warning"
+                          : decisionColour(ev.decision)
+                      }
+                      icon={
+                        loadingId === ev.id ? (
+                          <CircularProgress size={14} />
+                        ) : undefined
+                      }
+                      label={
+                        axis === "site"
+                          ? `${ev.dtag}:${ev.event_num}`
+                          : `${ev.event_num} · ${
+                              ev.event_fraction ?? "—"
+                            }`
+                      }
+                    />
+                  ))}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          );
+        })}
+        {groups.length === 0 && (
+          <Typography color="text.secondary" sx={{ p: 2 }} variant="body2">
+            No {axis === "dataset" ? "datasets" : "sites"} to show.
+          </Typography>
+        )}
+      </Box>
+
+      {/* Bottom: selected-event detail + contour + decision */}
       <Divider />
       <Box sx={{ height: 300, flexShrink: 0, p: 1.5, overflow: "auto" }}>
         {!selected ? (
