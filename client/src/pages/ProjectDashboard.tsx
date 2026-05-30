@@ -36,7 +36,25 @@ export function ProjectDashboard() {
 
   useEffect(() => {
     api.getProject(id).then(setProject).catch((e) => setError(String(e)));
-    api.projectReports(id).then(setReports).catch(() => setReports([]));
+    // A catalogued report may not be on disk (e.g. pandda_inspect.html before
+    // inspection). Probe each and keep only those that actually serve, so the
+    // iframe never shows a broken tab.
+    api
+      .projectReports(id)
+      .then(async (all) => {
+        const checks = await Promise.all(
+          all.map(async (r) => {
+            try {
+              const resp = await fetch(api.artifactUrl(r), { method: "HEAD" });
+              return resp.ok ? r : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        setReports(checks.filter((r): r is Artifact => r !== null));
+      })
+      .catch(() => setReports([]));
   }, [id]);
 
   if (error) return <Typography color="error">{error}</Typography>;
