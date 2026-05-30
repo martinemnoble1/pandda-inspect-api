@@ -16,9 +16,12 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import store from "../store";
 import {
   newMap,
@@ -299,32 +302,79 @@ export function InspectDrawer({
                     <MolViewer cifUrl={api.artifactUrl(liveLigand)} />
                   </Box>
                 )}
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                  {g.events.map((ev) => (
-                    <Chip
-                      key={ev.id}
-                      clickable={cootInitialized}
-                      disabled={!cootInitialized}
-                      onClick={() => loadEvent(ev)}
-                      color={
-                        selected?.id === ev.id
-                          ? "warning"
-                          : decisionColour(ev.decision)
-                      }
-                      icon={
-                        loadingId === ev.id ? (
-                          <CircularProgress size={14} />
-                        ) : undefined
-                      }
-                      label={
-                        axis === "site"
-                          ? `${ev.dtag}:${ev.event_num}`
-                          : `${ev.event_num} · ${
-                              ev.event_fraction ?? "—"
-                            }`
-                      }
-                    />
-                  ))}
+                {/* One-line legend so the chip encoding is self-explaining. */}
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 0.5 }}
+                >
+                  Click an event to view it in 3D · label is{" "}
+                  {axis === "site"
+                    ? "crystal : event"
+                    : "event · event-fraction"}
+                </Typography>
+                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                  {g.events.map((ev) => {
+                    const isLive = selected?.id === ev.id;
+                    const occ =
+                      ev.event_fraction != null
+                        ? `${Math.round(ev.event_fraction * 100)}%`
+                        : "—";
+                    const label =
+                      axis === "site"
+                        ? `${ev.dtag}:${ev.event_num}`
+                        : `Event ${ev.event_num} · ${occ}`;
+                    const tip = (
+                      <Box sx={{ fontSize: 12, lineHeight: 1.5 }}>
+                        <div>
+                          <strong>
+                            {ev.dtag} · event {ev.event_num}
+                          </strong>
+                        </div>
+                        <div>Event fraction: {occ}</div>
+                        <div>Z-peak: {ev.z_peak?.toFixed(1) ?? "—"}</div>
+                        <div>BDC: {ev.bdc ?? "—"}</div>
+                        <div>Cluster size: {ev.cluster_size ?? "—"}</div>
+                        <div>Site: {ev.site_num ?? "—"}</div>
+                        <div style={{ marginTop: 4, opacity: 0.8 }}>
+                          {cootInitialized
+                            ? "Click to load structure + event map"
+                            : "Waiting for Moorhen…"}
+                        </div>
+                      </Box>
+                    );
+                    return (
+                      <Tooltip key={ev.id} title={tip} arrow placement="top">
+                        {/* span wrapper so Tooltip works on a disabled chip */}
+                        <span>
+                          <Chip
+                            clickable={cootInitialized}
+                            disabled={!cootInitialized}
+                            onClick={() => loadEvent(ev)}
+                            variant={isLive ? "filled" : "outlined"}
+                            color={
+                              isLive ? "warning" : decisionColour(ev.decision)
+                            }
+                            icon={
+                              loadingId === ev.id ? (
+                                <CircularProgress size={14} />
+                              ) : ev.decision === "hit" ? (
+                                <CheckCircleIcon />
+                              ) : (
+                                <ViewInArIcon />
+                              )
+                            }
+                            label={label}
+                            sx={{
+                              fontWeight: isLive ? 700 : 500,
+                              transition: "transform 80ms ease",
+                              "&:hover": { transform: "translateY(-1px)" },
+                            }}
+                          />
+                        </span>
+                      </Tooltip>
+                    );
+                  })}
                 </Stack>
               </AccordionDetails>
             </Accordion>
