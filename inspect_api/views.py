@@ -106,12 +106,17 @@ class EventViewSet(
     serializer_class = EventSerializer
 
     def get_queryset(self):
-        qs = Event.objects.all().select_related("dataset").prefetch_related(
-            "artifacts"
+        qs = (
+            Event.objects.all()
+            .select_related("dataset")
+            .prefetch_related("artifacts", "dataset__artifacts")
         )
         dtag = self.request.query_params.get("dtag")
         if dtag:
             qs = qs.filter(dataset__dtag=dtag)
+        project = self.request.query_params.get("project")
+        if project:
+            qs = qs.filter(dataset__project__name=project)
         hits_only = self.request.query_params.get("hits_only")
         if hits_only in ("1", "true", "True"):
             qs = qs.exclude(decision=Event.Decision.NO_HIT)

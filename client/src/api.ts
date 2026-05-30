@@ -83,7 +83,7 @@ export const api = {
     ),
   listEvents: (projectName: string) =>
     get<Paginated<PanddaEvent>>(
-      `/events/?limit=500`
+      `/events/?project=${encodeURIComponent(projectName)}&limit=500`
     ),
   async setDecision(eventId: number, patch: Partial<PanddaEvent>) {
     const r = await fetch(`${BASE}/events/${eventId}/`, {

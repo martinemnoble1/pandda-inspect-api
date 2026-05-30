@@ -22,7 +22,22 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
 class EventSerializer(serializers.ModelSerializer):
     dtag = serializers.CharField(source="dataset.dtag", read_only=True)
-    artifacts = ArtifactSerializer(many=True, read_only=True)
+    # Everything the inspect client needs to load this event in one place: the
+    # event's own artifacts (event map) PLUS its dataset's shared artifacts
+    # (structure, ligand dicts). The structure is attached at dataset level (one
+    # model per crystal, shared across its events), so surface it here too.
+    artifacts = serializers.SerializerMethodField()
+
+    @extend_schema_field(ArtifactSerializer(many=True))
+    def get_artifacts(self, obj):
+        own = list(obj.artifacts.all())
+        shared = obj.dataset.artifacts.filter(
+            kind__in=[
+                Artifact.Kind.STRUCTURE,
+                Artifact.Kind.LIGAND,
+            ]
+        )
+        return ArtifactSerializer(own + list(shared), many=True).data
 
     class Meta:
         model = Event
