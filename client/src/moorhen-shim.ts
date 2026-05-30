@@ -50,14 +50,19 @@ export interface MoorhenMapLike {
   delete(): Promise<unknown>;
 }
 
+// NB: pass the commandCentre REF object (not .current). MoorhenMolecule/Map
+// read this.commandCentre.current.cootCommand internally, so they need the ref.
 export function newMolecule(
-  commandCentre: unknown,
+  commandCentreRef: unknown,
   store: unknown
 ): MoorhenMoleculeLike {
-  return new MoleculeCtor(commandCentre, store, "");
+  return new MoleculeCtor(commandCentreRef, store, "");
 }
-export function newMap(commandCentre: unknown, store: unknown): MoorhenMapLike {
-  return new MapCtor(commandCentre, store);
+export function newMap(
+  commandCentreRef: unknown,
+  store: unknown
+): MoorhenMapLike {
+  return new MapCtor(commandCentreRef, store);
 }
 
 export const setActiveMap = _setActiveMap as (map: unknown) => {

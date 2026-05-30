@@ -92,7 +92,9 @@ export function InspectDrawer({
 
           const struct = artifactOf(ev, "structure");
           if (struct) {
-            const mol = newMolecule(commandCentre.current, store);
+            // Pass the ref, not .current — Moorhen reads commandCentre.current
+            // internally.
+            const mol = newMolecule(commandCentre, store);
             await mol.loadToCootFromURL(api.artifactUrl(struct), ev.dtag);
             // Representation before dispatch: 0.23's sequence viewer reads
             // representations[0] for any molecule with a sequence.
@@ -103,7 +105,7 @@ export function InspectDrawer({
 
         const emap = artifactOf(ev, "event_map");
         if (emap) {
-          const map = newMap(commandCentre.current, store);
+          const map = newMap(commandCentre, store);
           await map.loadToCootFromMtzURL(api.artifactUrl(emap), `${ev.dtag}-EVENT`, {
             F: "FEVENT",
             PHI: "PHEVENT",
