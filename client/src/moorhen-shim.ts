@@ -14,7 +14,6 @@
 import {
   MoorhenMolecule as _Molecule,
   MoorhenMap as _Map,
-  // @ts-expect-error — present at runtime; alpha .d.ts under-types the action.
   setActiveMap as _setActiveMap,
 } from "moorhen";
 

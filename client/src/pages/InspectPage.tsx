@@ -35,7 +35,9 @@ export function InspectPage() {
   const commandCentre = useRef<moorhen.CommandCentre | null>(null);
   const moleculesRef = useRef<moorhen.Molecule[] | null>(null);
   const mapsRef = useRef<moorhen.Map[] | null>(null);
-  const activeMapRef = useRef(null) as RefObject<moorhen.Map>;
+  const activeMapRef = useRef<moorhen.Map>(
+    null as unknown as moorhen.Map
+  );
   const lastHoveredAtomRef = useRef<moorhen.HoveredAtom | null>(null);
 
   useEffect(() => {
@@ -52,11 +54,12 @@ export function InspectPage() {
             projectName={project?.name ?? ""}
             glRef={glRef}
             commandCentre={commandCentre}
+            cootInitialized={!!cootInitialized}
           />
         ),
       },
     }),
-    [project?.name]
+    [project?.name, cootInitialized]
   );
 
   useEffect(() => {

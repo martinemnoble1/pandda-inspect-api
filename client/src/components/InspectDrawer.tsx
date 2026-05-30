@@ -32,12 +32,18 @@ interface Props {
   projectName: string;
   glRef: RefObject<unknown>;
   commandCentre: RefObject<moorhen.CommandCentre | null>;
+  cootInitialized: boolean;
 }
 
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
 
-export function InspectDrawer({ projectName, glRef, commandCentre }: Props) {
+export function InspectDrawer({
+  projectName,
+  glRef,
+  commandCentre,
+  cootInitialized,
+}: Props) {
   const dispatch = useDispatch();
   const [events, setEvents] = useState<PanddaEvent[]>([]);
   const [search, setSearch] = useState("");
@@ -72,7 +78,12 @@ export function InspectDrawer({ projectName, glRef, commandCentre }: Props) {
 
   const loadEvent = useCallback(
     async (ev: PanddaEvent) => {
-      if (!glRef.current || !commandCentre.current) return;
+      // Coot must be fully initialised: commandCentre.current exists early but
+      // its cootCommand isn't wired until cootInitialized flips true.
+      const cc = commandCentre.current as
+        | (moorhen.CommandCentre & { cootCommand?: unknown })
+        | null;
+      if (!cootInitialized || !glRef.current || !cc?.cootCommand) return;
       setLoadingId(ev.id);
       try {
         if (loadedDtag.current !== ev.dtag) {
@@ -116,7 +127,7 @@ export function InspectDrawer({ projectName, glRef, commandCentre }: Props) {
         setLoadingId(null);
       }
     },
-    [glRef, commandCentre, dispatch, clearLoaded]
+    [glRef, commandCentre, cootInitialized, dispatch, clearLoaded]
   );
 
   const onContour = useCallback((_: Event, v: number | number[]) => {
@@ -155,6 +166,11 @@ export function InspectDrawer({ projectName, glRef, commandCentre }: Props) {
       {/* Top: searchable event list */}
       <Box sx={{ p: 1, flexShrink: 0 }}>
         <Typography variant="subtitle1">Events — {projectName}</Typography>
+        {!cootInitialized && (
+          <Typography variant="caption" color="text.secondary">
+            Waiting for Moorhen to finish loading…
+          </Typography>
+        )}
         <TextField
           size="small"
           fullWidth
@@ -170,6 +186,7 @@ export function InspectDrawer({ projectName, glRef, commandCentre }: Props) {
             <ListItemButton
               key={ev.id}
               divider
+              disabled={!cootInitialized}
               selected={selected?.id === ev.id}
               onClick={() => loadEvent(ev)}
             >

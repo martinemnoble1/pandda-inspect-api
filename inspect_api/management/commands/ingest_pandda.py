@@ -129,13 +129,19 @@ class Command(BaseCommand):
         n_reports = 0
         html_map = data.get("output_files", {}).get("html", {}) or {}
         for rel in html_map.values():
-            if rel:
-                Artifact.objects.create(
-                    project=project,
-                    kind=Artifact.Kind.REPORT_HTML,
-                    relpath=self._norm(rel),
-                )
-                n_reports += 1
+            if not rel:
+                continue
+            norm = self._norm(rel)
+            # Some report HTMLs (e.g. pandda_inspect.html) are only written
+            # after inspection — don't catalogue ones absent on disk.
+            if not (root / norm).is_file():
+                continue
+            Artifact.objects.create(
+                project=project,
+                kind=Artifact.Kind.REPORT_HTML,
+                relpath=norm,
+            )
+            n_reports += 1
 
         n_shells = 0
         for sh in data.get("shell_records", []):

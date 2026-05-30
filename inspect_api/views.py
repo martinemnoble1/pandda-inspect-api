@@ -165,7 +165,12 @@ class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):
             raise Http404("Invalid artifact path")
         if not path.is_file():
             raise Http404(f"Artifact not on disk: {artifact.relpath}")
-        return FileResponse(open(path, "rb"))
+        resp = FileResponse(open(path, "rb"))
+        # The client runs under COEP=require-corp (for Moorhen's WASM), so any
+        # subresource it fetches — report HTML in an iframe, maps/coords into
+        # Coot — must opt in with CORP. Same-origin here (proxied), so:
+        resp["Cross-Origin-Resource-Policy"] = "same-origin"
+        return resp
 
 
 class ShellViewSet(viewsets.ReadOnlyModelViewSet):
