@@ -67,6 +67,10 @@ export interface PanddaEvent {
   build_score: number | null;
   rscc: number | null;
   optimal_contour: number | null;
+  // Whether this event's autobuilt pose is ACCEPTED into the crystal model
+  // (a LIG at its location is in the merged pandda-model.pdb), vs just a
+  // candidate pose on disk. null = unknown (no merged model to compare).
+  pose_merged: boolean | null;
   xyz_centroid: number[];
   xyz_peak: number[];
   decision: string;

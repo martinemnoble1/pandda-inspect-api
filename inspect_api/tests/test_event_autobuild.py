@@ -108,3 +108,77 @@ class EventAutobuildIngestTests(TestCase):
         # not point Event.current_model at it (would load a bare ligand).
         e1 = self._ingest().events.get(event_num=1)
         self.assertIsNone(e1.current_model)
+
+
+def _pdb_with_lig(path: Path, *centres) -> None:
+    """Write a PDB (via gemmi) with one single-atom LIG residue per centre,
+    so each residue's centroid IS the given centre."""
+    import gemmi
+
+    st = gemmi.Structure()
+    model = gemmi.Model("1")
+    chain = gemmi.Chain("A")
+    for i, (x, y, z) in enumerate(centres, start=1):
+        res = gemmi.Residue()
+        res.name = "LIG"
+        res.seqid = gemmi.SeqId(i, " ")
+        atom = gemmi.Atom()
+        atom.name = "C1"
+        atom.element = gemmi.Element("C")
+        atom.pos = gemmi.Position(x, y, z)
+        res.add_atom(atom)
+        chain.add_residue(res)
+    model.add_chain(chain)
+    st.add_model(model)
+    st.write_pdb(str(path))
+
+
+class PoseMergedMatchTests(TestCase):
+    """The accepted-vs-candidate determination: a pose centroid matches a
+    merged-model LIG centroid within POSE_MATCH_TOL → merged, else candidate.
+    """
+
+    def _cmd(self):
+        from inspect_api.management.commands.ingest_pandda2 import Command
+        return Command()
+
+    def test_centroid_extraction(self):
+        d = Path(tempfile.mkdtemp())
+        pdb = d / "m.pdb"
+        _pdb_with_lig(pdb, (10.0, 20.0, 30.0), (40.0, 50.0, 60.0))
+        cs = sorted(self._cmd()._pdb_lig_centroids(pdb))
+        self.assertEqual(len(cs), 2)
+        self.assertAlmostEqual(cs[0][0], 10.0, places=2)
+        self.assertAlmostEqual(cs[1][2], 60.0, places=2)
+
+    def test_pose_matches_merged_lig(self):
+        d = Path(tempfile.mkdtemp())
+        merged = d / "merged.pdb"
+        pose = d / "pose.pdb"
+        # Pose ~2 Å from a merged LIG (< 5 Å tol) → accepted.
+        _pdb_with_lig(merged, (10.0, 10.0, 10.0), (99.0, 99.0, 99.0))
+        _pdb_with_lig(pose, (11.0, 10.0, 11.7))
+        merged_ligs = self._cmd()._pdb_lig_centroids(merged)
+        self.assertIs(
+            self._cmd()._pose_is_merged(d, "x", "pose.pdb", merged_ligs),
+            True,
+        )
+
+    def test_pose_far_from_any_lig_is_candidate(self):
+        d = Path(tempfile.mkdtemp())
+        merged = d / "merged.pdb"
+        pose = d / "pose.pdb"
+        _pdb_with_lig(merged, (10.0, 10.0, 10.0))
+        _pdb_with_lig(pose, (60.0, 60.0, 60.0))  # tens of Å away
+        merged_ligs = self._cmd()._pdb_lig_centroids(merged)
+        self.assertIs(
+            self._cmd()._pose_is_merged(d, "x", "pose.pdb", merged_ligs),
+            False,
+        )
+
+    def test_unknown_when_no_merged_model(self):
+        d = Path(tempfile.mkdtemp())
+        _pdb_with_lig(d / "pose.pdb", (1.0, 2.0, 3.0))
+        self.assertIsNone(
+            self._cmd()._pose_is_merged(d, "x", "pose.pdb", None)
+        )

@@ -162,11 +162,16 @@ class Command(BaseCommand):
         # processed_datasets/<dtag>/events.yaml, keyed by the same 1-based index
         # as the CSV's event_idx. Absent for ~32/200 BAZ2B datasets — tolerated.
         builds = self._read_event_builds(root, dtag)
+        # LIG centroids in the merged crystal model — used to tell an ACCEPTED
+        # pose (one built into the model) from a mere candidate (None if there
+        # is no merged model to compare against). Read once per dataset.
+        merged_ligs = self._merged_lig_centroids(root, dtag)
         events = []
         for r in rows:
             event_idx = _i(r.get("event_idx"))
             xyz = [_f(r.get("x")), _f(r.get("y")), _f(r.get("z"))]
             build = builds.get(event_idx, {})
+            pose_rel = build.get("pose_relpath")
             events.append(
                 EventSpec(
                     event_num=event_idx,
@@ -186,14 +191,79 @@ class Command(BaseCommand):
                         "build_score": build.get("build_score"),
                         "rscc": build.get("rscc"),
                         "optimal_contour": build.get("optimal_contour"),
+                        # Accepted-into-model? Match the pose centroid against
+                        # the merged model's LIG centroids. None when unknown
+                        # (no merged model, or no pose to locate).
+                        "pose_merged": self._pose_is_merged(
+                            root, dtag, pose_rel, merged_ligs
+                        ),
                     },
                     event_map_relpath=self._find_event_map(
                         root, dtag, event_idx, r.get("1-BDC")
                     ),
-                    ligand_pose_relpath=build.get("pose_relpath"),
+                    ligand_pose_relpath=pose_rel,
                 )
             )
         return events
+
+    # --- accepted-vs-candidate pose determination -----------------------
+
+    # Å tolerance: a pose centroid within this of a merged-model LIG centroid
+    # counts as "the same ligand, built in". Generous — autobuild vs merged
+    # coords differ slightly, but distinct events are tens of Å apart.
+    POSE_MATCH_TOL = 5.0
+
+    @staticmethod
+    def _pdb_lig_centroids(pdb: Path) -> list:
+        """Centroid of each LIG residue in a PDB, one per residue, via gemmi.
+
+        Robust structure parsing (not hand-cut columns): read the model, take
+        every residue named LIG, average its atom positions. Empty list on any
+        read/parse error or missing file.
+        """
+        import gemmi
+
+        try:
+            st = gemmi.read_structure(str(pdb))
+        except (RuntimeError, OSError, ValueError):
+            return []
+        out = []
+        for model in st:
+            for chain in model:
+                for res in chain:
+                    if res.name != "LIG":
+                        continue
+                    pts = [(a.pos.x, a.pos.y, a.pos.z) for a in res]
+                    if not pts:
+                        continue
+                    n = len(pts)
+                    out.append(tuple(sum(c) / n for c in zip(*pts)))
+        return out
+
+    def _merged_lig_centroids(self, root: Path, dtag: str) -> list | None:
+        """LIG centroids in the dataset's merged pandda-model.pdb, or None if
+        there is no merged model (so 'accepted' is simply unknown)."""
+        rel = self._analysis_model_relpath(root / PROCESSED, dtag)
+        if rel is None:
+            return None
+        return self._pdb_lig_centroids(root / rel)
+
+    def _pose_is_merged(
+        self, root: Path, dtag: str, pose_rel, merged_ligs
+    ) -> bool | None:
+        """True if this event's pose centroid coincides with a merged-model LIG
+        (accepted); False if it doesn't (candidate); None if undeterminable."""
+        if pose_rel is None or merged_ligs is None:
+            return None
+        poses = self._pdb_lig_centroids(root / pose_rel)
+        if not poses:
+            return None
+        pc = poses[0]
+        for mc in merged_ligs:
+            d2 = sum((a - b) ** 2 for a, b in zip(pc, mc))
+            if d2 <= self.POSE_MATCH_TOL ** 2:
+                return True
+        return False
 
     @staticmethod
     def _read_event_builds(root: Path, dtag: str) -> dict:

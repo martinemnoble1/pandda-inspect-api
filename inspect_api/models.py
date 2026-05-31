@@ -132,6 +132,15 @@ class Event(models.Model):
     build_score = models.FloatField(null=True, blank=True)
     rscc = models.FloatField(null=True, blank=True)
     optimal_contour = models.FloatField(null=True, blank=True)
+    # Whether this event's autobuilt ligand pose is ACCEPTED into the crystal
+    # model — i.e. a LIG residue at the pose's location is present in the
+    # dataset's merged ``pandda-model.pdb``. Distinguishes a *candidate* pose
+    # (exists on disk, has a LIGAND_POSE artifact) from one actually built into
+    # the model. Determined at ingest by matching the pose centroid against the
+    # merged model's LIG centroids; flipped to True when our merge action builds
+    # the pose in. Null = unknown (no merged model to compare). See the
+    # per-event-vs-crystal-model + legacy-inspect notes.
+    pose_merged = models.BooleanField(null=True, blank=True)
     # Recentre target for the viewer.
     xyz_centroid = models.JSONField(default=list)
     xyz_peak = models.JSONField(default=list)

@@ -45,18 +45,38 @@ export const bestQuality = (events: PanddaEvent[]): number | null =>
   }, null);
 
 /**
- * True when this event has an autobuilt ligand pose — a per-event LIGAND_POSE
- * artifact (PanDDA2 fitted a ligand into THIS event's density). This is the
- * genuine per-event "built" signal; current_model is the per-crystal merged
- * model and would mark every event in an autobuilt dataset (see the
- * per-event-vs-crystal-model design note).
+ * Per-event ligand state, distinguishing what's only a CANDIDATE from what's
+ * actually built into the crystal model (the inconsistency where all events
+ * showed "built" but only one ligand was in the merged model):
+ *  - "merged":    an autobuilt pose exists AND is accepted into the crystal
+ *                 model (pose_merged === true) — a real built ligand here.
+ *  - "candidate": an autobuilt pose exists but is NOT in the model
+ *                 (pose_merged === false/null) — a proposal to merge.
+ *  - "none":      no autobuilt pose for this event.
+ * current_model is per-crystal, so it can't tell these apart — pose_merged
+ * (matched at ingest) is the per-event truth. See per-event-vs-crystal-model.
  */
-export const eventIsBuilt = (ev: PanddaEvent): boolean =>
-  ev.artifacts.some((a) => a.kind === "ligand_pose");
+export type EventPoseState = "merged" | "candidate" | "none";
+export const eventPoseState = (ev: PanddaEvent): EventPoseState => {
+  const hasPose = ev.artifacts.some((a) => a.kind === "ligand_pose");
+  if (!hasPose) return "none";
+  return ev.pose_merged === true ? "merged" : "candidate";
+};
 
-/** Dataset rolls up to "built" when any of its events has a pose. */
+/** Has an autobuilt pose (merged OR candidate) — for the dataset rollup. */
+export const eventHasPose = (ev: PanddaEvent): boolean =>
+  eventPoseState(ev) !== "none";
+
+/** Truly built into the crystal model. */
+export const eventIsMerged = (ev: PanddaEvent): boolean =>
+  eventPoseState(ev) === "merged";
+
+/** Dataset rolls up to "built" when any event's pose is MERGED into the
+ * model; "candidate" when it only has unmerged poses. */
 export const isAutobuilt = (events: PanddaEvent[]): boolean =>
-  events.some(eventIsBuilt);
+  events.some(eventIsMerged);
+export const hasCandidatePose = (events: PanddaEvent[]): boolean =>
+  events.some((e) => eventPoseState(e) === "candidate");
 
 /**
  * A dataset is "fully rejected" when it has events and every one is no_hit —

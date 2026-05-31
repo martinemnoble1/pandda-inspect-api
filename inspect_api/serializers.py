@@ -75,6 +75,7 @@ class EventSerializer(serializers.ModelSerializer):
             "build_score",
             "rscc",
             "optimal_contour",
+            "pose_merged",
             "xyz_centroid",
             "xyz_peak",
             # mutable inspection state — writable
@@ -101,6 +102,7 @@ class EventSerializer(serializers.ModelSerializer):
             "build_score",
             "rscc",
             "optimal_contour",
+            "pose_merged",
             "xyz_centroid",
             "xyz_peak",
             "inspected_at",

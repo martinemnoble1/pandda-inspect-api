@@ -48,11 +48,12 @@ import {
   adjacentEvent,
   applyFilter,
   bestQuality,
-  eventIsBuilt,
+  eventPoseState,
   eventQuality,
   FILTER_LABELS,
   flattenEvents,
   groupEvents,
+  hasCandidatePose,
   isAutobuilt,
   nextFilter,
   SORT_LABELS,
@@ -554,6 +555,7 @@ export function InspectDrawer({
                         (e) => e.decision === "hit"
                       ).length;
                       const built = isAutobuilt(g.events);
+                      const candidate = !built && hasCandidatePose(g.events);
                       const topQ = bestQuality(g.events);
                       return (
                         <>
@@ -568,7 +570,9 @@ export function InspectDrawer({
                           </Tooltip>
                           {built && (
                             <Tooltip
-                              title="A ligand model was autobuilt for this dataset"
+                              title={
+                                "A ligand is built into this crystal's model"
+                              }
                               arrow
                             >
                               <Chip
@@ -576,6 +580,23 @@ export function InspectDrawer({
                                 color="info"
                                 icon={<BuildCircleIcon />}
                                 label="built"
+                              />
+                            </Tooltip>
+                          )}
+                          {candidate && (
+                            <Tooltip
+                              title={
+                                "Autobuilt ligand pose(s) proposed but not " +
+                                "yet merged into the model"
+                              }
+                              arrow
+                            >
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color="info"
+                                icon={<BuildCircleIcon />}
+                                label="candidate"
                               />
                             </Tooltip>
                           )}
@@ -641,7 +662,9 @@ export function InspectDrawer({
                   {g.events.map((ev) => {
                     const isLive = selected?.id === ev.id;
                     const q = eventQuality(ev);
-                    const built = eventIsBuilt(ev);
+                    const poseState = eventPoseState(ev);
+                    const merged = poseState === "merged";
+                    const candidate = poseState === "candidate";
                     const occ =
                       ev.event_fraction != null
                         ? `${Math.round(ev.event_fraction * 100)}%`
@@ -668,11 +691,16 @@ export function InspectDrawer({
                         <div
                           style={{
                             marginTop: 4,
-                            color: built ? "#4fc3f7" : undefined,
+                            color:
+                              poseState !== "none" ? "#4fc3f7" : undefined,
                           }}
                         >
-                          {built
-                            ? `Autobuilt ligand · RSCC ${
+                          {merged
+                            ? `Ligand built into model · RSCC ${
+                                ev.rscc?.toFixed(2) ?? "—"
+                              }`
+                            : candidate
+                            ? `Candidate pose (not merged) · RSCC ${
                                 ev.rscc?.toFixed(2) ?? "—"
                               }`
                             : "No autobuilt ligand"}
@@ -701,10 +729,10 @@ export function InspectDrawer({
                                 <CircularProgress size={14} />
                               ) : ev.decision === "hit" ? (
                                 <CheckCircleIcon />
-                              ) : built ? (
-                                // An autobuilt ligand backs this event — flag it
-                                // with the build icon so it reads differently
-                                // from a bare candidate event at a glance.
+                              ) : poseState !== "none" ? (
+                                // A built/candidate ligand backs this event —
+                                // flag it with the build icon (solid for
+                                // merged, outlined-tint for candidate via sx).
                                 <BuildCircleIcon />
                               ) : (
                                 <ViewInArIcon />
@@ -718,12 +746,20 @@ export function InspectDrawer({
                               // Built events get a solid accent edge + tint so
                               // they stand out among unbuilt candidates without
                               // stealing the decision colour (hit/no-hit) or the
-                              // live "viewing" highlight.
-                              ...(built && !isLive
+                              // live "viewing" highlight. Merged = solid accent;
+                              // candidate = dashed accent (proposed, not in
+                              // model yet).
+                              ...(merged && !isLive
                                 ? {
                                     borderColor: "info.main",
                                     borderWidth: 1.5,
                                     bgcolor: "rgba(79,195,247,0.08)",
+                                  }
+                                : candidate && !isLive
+                                ? {
+                                    borderColor: "info.main",
+                                    borderStyle: "dashed",
+                                    bgcolor: "rgba(79,195,247,0.03)",
                                   }
                                 : {}),
                             }}
