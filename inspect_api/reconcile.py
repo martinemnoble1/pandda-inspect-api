@@ -55,6 +55,10 @@ class EventSpec:
     metrics: dict = field(default_factory=dict)
     # Optional event-map artifact (one imported artifact bound to this event).
     event_map_relpath: str | None = None
+    # Optional autobuilt ligand-pose artifact (LIGAND_POSE; ligand-only coords
+    # for this event). Provenance/overlay, not a model — see DESIGN + the
+    # per-event-vs-crystal-model note. Imported origin; replaced on re-ingest.
+    ligand_pose_relpath: str | None = None
 
 
 @dataclass
@@ -207,10 +211,12 @@ def _reconcile_events(dataset, ds_spec, res):
         event.save()
         res.n_events += 1
 
-        # Event-map artifact (imported): replace this event's imported maps.
+        # Event-scoped imported artifacts (event map + autobuilt ligand pose):
+        # replace wholesale. Built/refined event artifacts (origin != imported)
+        # are untouched.
         event.artifacts.filter(
             origin=Artifact.Origin.IMPORTED,
-            kind=Artifact.Kind.EVENT_MAP,
+            kind__in=(Artifact.Kind.EVENT_MAP, Artifact.Kind.LIGAND_POSE),
         ).delete()
         if ev_spec.event_map_relpath:
             Artifact.objects.create(
@@ -219,6 +225,15 @@ def _reconcile_events(dataset, ds_spec, res):
                 event=event,
                 kind=Artifact.Kind.EVENT_MAP,
                 relpath=ev_spec.event_map_relpath,
+                origin=Artifact.Origin.IMPORTED,
+            )
+        if ev_spec.ligand_pose_relpath:
+            Artifact.objects.create(
+                project=dataset.project,
+                dataset=dataset,
+                event=event,
+                kind=Artifact.Kind.LIGAND_POSE,
+                relpath=ev_spec.ligand_pose_relpath,
                 origin=Artifact.Origin.IMPORTED,
             )
 
@@ -232,9 +247,15 @@ def _replace_imported_dataset_artifacts(project, dataset, ds_spec) -> set:
     Built/refined artifacts (origin != imported) are untouched. Returns the
     set of imported *input* relpaths after the replace (for drift detection).
     """
+    # Event-scoped imported artifacts (event maps AND ligand poses) are owned by
+    # _reconcile_events, which already replaced them this run — exclude both here
+    # so we don't delete the poses it just created (they match this dataset's
+    # imported, non-event-map set otherwise).
     dataset.artifacts.filter(
         origin=Artifact.Origin.IMPORTED,
-    ).exclude(kind=Artifact.Kind.EVENT_MAP).delete()
+    ).exclude(
+        kind__in=(Artifact.Kind.EVENT_MAP, Artifact.Kind.LIGAND_POSE)
+    ).delete()
     for a in ds_spec.artifacts:
         Artifact.objects.create(
             project=project,

@@ -123,6 +123,15 @@ class Event(models.Model):
     # PanDDA's own boolean verdict (PanDDA2 ``interesting`` column). Again
     # distinct from the human decision; advisory only.
     interesting = models.BooleanField(null=True, blank=True)
+    # Per-event autobuild metrics from events.yaml ``Build:`` block. The
+    # autobuild fits a ligand pose into THIS event's density and scores it; these
+    # quantify that fit (build_score/rscc) and the contour at which it reads best
+    # (optimal_contour, used to seed the viewer's contour slider). The pose
+    # coords themselves are a LIGAND_POSE artifact. All null for PanDDA1 / events
+    # without a Build block (~32/200 BAZ2B datasets have none).
+    build_score = models.FloatField(null=True, blank=True)
+    rscc = models.FloatField(null=True, blank=True)
+    optimal_contour = models.FloatField(null=True, blank=True)
     # Recentre target for the viewer.
     xyz_centroid = models.JSONField(default=list)
     xyz_peak = models.JSONField(default=list)
@@ -178,6 +187,11 @@ class Artifact(models.Model):
         OUTPUT_MTZ = "output_mtz", "Output / Z-map MTZ"
         EVENT_MAP = "event_map", "Event map"
         LIGAND = "ligand", "Ligand dictionary"
+        # An event's chosen autobuild ligand POSE — ligand-only coords
+        # (PanDDA2 autobuild/N_M_ligand_0.pdb). Event-scoped provenance/overlay,
+        # NOT a model: never current_model, never refinement input. The model of
+        # record is the per-crystal Dataset.current_model (merged pandda-model).
+        LIGAND_POSE = "ligand_pose", "Autobuilt ligand pose (event)"
         REPORT_HTML = "report_html", "HTML report"
 
     class Origin(models.TextChoices):

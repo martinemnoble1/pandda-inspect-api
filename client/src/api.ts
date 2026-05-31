@@ -41,6 +41,12 @@ export interface PanddaEvent {
   z_mean: number | null;
   cluster_size: number | null;
   map_resolution: number | null;
+  // Per-event autobuild metrics (PanDDA2 events.yaml Build:). build_score/rscc
+  // quantify the fitted ligand pose; optimal_contour is the σ level it reads
+  // best at (used to seed the contour slider). Null when no autobuild.
+  build_score: number | null;
+  rscc: number | null;
+  optimal_contour: number | null;
   xyz_centroid: number[];
   xyz_peak: number[];
   decision: string;
