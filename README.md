@@ -51,17 +51,17 @@ contract above them does not change when the implementation behind them does.
 
 ## Quickstart
 
+Full, audience-specific setup (developer vs. tester, sample-data fetch, the
+CCP4 + PanDDA2 activation recipe) is in **[docs/SETUP.md](docs/SETUP.md)**. The
+short version for a developer:
+
 ```bash
-cd ~/Developer/pandda-inspect-api
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
+cp .env.example .env          # edit paths — see docs/SETUP.md
 python manage.py migrate
-python manage.py ingest_pandda \
-  --project Pandda-CDK2A-RXL \
-  --root ~/Developer/MoorhenPanddaApp/PanddaProjects/Pandda-CDK2A-RXL
-
 python manage.py runserver 8000
+# then fetch + ingest public sample data per docs/SETUP.md §A.4
 ```
 
 Then:
@@ -70,6 +70,9 @@ Then:
 - **Swagger UI (browse the contract):** http://localhost:8000/api/docs/
 - **Browsable API:** http://localhost:8000/api/v1/datasets/ , `/events/` , `/artifacts/`
 - Record a decision: `PATCH /api/v1/events/{id}/` with `{"decision": "hit"}`
+
+The inspect + decision loop and the test suite need **no** CCP4/PanDDA2 install;
+dispatching a refinement does — see [docs/SETUP.md §B](docs/SETUP.md).
 
 ## What this is NOT
 

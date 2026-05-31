@@ -312,14 +312,15 @@ artifact-landing contract.
 
 ## 4. Implementation order (proposed, post-design)
 
-1. **Schema** — add `Artifact.origin/parent/produced_by/created_at`,
-   `Event.current_model`, `Dataset.current_model`, `inputs_changed` flags, and
-   the `Job` model + migration. (No behaviour yet — just the durable shape.)
-2. **Re-ingest policy** — make both ingest readers honour §1.3 (additive,
-   import-scoped, flag divergence) instead of clobbering.
-3. **`JobRunner` real** — `LocalProcessRunner.submit/status/cancel` over a real
-   subprocess; env-detect `giant.quick_refine`; the submit→poll→land-artifact
-   loop (§2.1) wired into a `Job` viewset + endpoints.
+1. **Schema** — ✅ DONE (migration 0004): `Artifact.origin/parent/produced_by/
+   created_at`, `Event.current_model`, `Dataset.current_model`,
+   `inputs_changed`, the `Job` model.
+2. **Re-ingest policy** — ✅ DONE (`inspect_api/reconcile.py` + both readers
+   refactored to parse→spec; `tests/test_reconcile.py`). Additive,
+   import-scoped, flags divergence (§1.3).
+3. **`JobRunner` real** — ◧ DESIGNED (see §5 below): `LocalProcessRunner` over a
+   real subprocess via a status-file wrapper; env-detect `giant.quick_refine`;
+   the submit→poll→land-artifact loop (§2.1, §5) wired into a `Job` viewset.
 4. **#4 ligand build** — port the Coot recipe; register `origin=built` artifact;
    auto-PATCH decision=hit (§2.2).
 5. **Electron binding** — main process spawns the PyInstaller backend; wire
@@ -330,4 +331,181 @@ artifact-landing contract.
 Items 1–2 are the #2 foundation and should land before 3–4 (a job/build that
 produced artifacts *before* the lineage model existed would recreate the drift
 bug). 5 and 6 are independent bindings of whatever 1–4 produce.
+
+---
+
+## 5. Step 3 mechanics — JobRunner, the status-file wrapper, and landing
+
+Design of record for implementation item 3. All four shaping decisions below
+were taken deliberately (dialog, 2026-05-31).
+
+### 5.1 Status reporting — a status-file wrapper (NOT live PID introspection)
+
+Django is stateless across requests, so when a client later polls
+`GET /jobs/{id}/` nothing owns the live subprocess. So `submit()` does NOT just
+`Popen` the tool — it `Popen`s a small **wrapper** that runs the tool and then
+writes the outcome to a file the poll reads:
+
+```
+<jobdir>/status.json   {"state": "running|succeeded|failed",
+                        "exit_code": int|null,
+                        "outputs": {"pdb": "...", "log": "..."}}
+<jobdir>/job.log       captured stdout+stderr
+```
+
+`status(handle)` is a **pure read** of `status.json` (absent/partial ⇒ still
+running). Properties this buys: stateless, survives a server restart, no PID
+races. Decisively, **this is the exact mechanism the compose `SharedVolumeRunner`
+(§3.2) uses** — the laptop runner pre-proves the compose binding rather than
+diverging from it. The wrapper is also tool-agnostic, which is what lets a
+hermetic test drive the whole loop with a trivial command on a CCP4-less machine
+(the user-facing tool stays the real, env-gated `giant.quick_refine`).
+
+### 5.2 Job working dir — under the project source_root
+
+Each job gets `<project.source_root>/jobs/<job_id>/`. Refined outputs live there,
+so the new `Artifact.relpath = jobs/<job_id>/refine.pdb` resolves through the
+**existing** DataStore / source_root logic with zero new path handling, and the
+download view's lexical traversal guard (it checks the relpath against
+source_root *before* following symlinks — `views.py`) already permits it because
+`jobs/<id>/...` is a plain sub-path. In-place-ingested projects keep working.
+
+### 5.3 Inputs and lineage
+
+The runner resolves a `JobSpec` (which names *what*, never *where*) to paths at
+submit time:
+
+* **input PDB** = `Dataset.current_model` if set, else the dataset's imported
+  `structure` artifact;
+* **MTZ** = the dataset's `data_mtz` artifact;
+* **restraints** = the dataset's `ligand` CIF artifact(s).
+
+The refined output is registered as `Artifact(origin=refined,
+parent=<the input PDB artifact>, produced_by=<job>)`, so lineage chains
+correctly: `imported ← refined`, or `built ← refined` when a ligand was built
+first. `Dataset.current_model` then repoints to the refined artifact.
+
+### 5.4 Landing — server-side, on first observed success, idempotent
+
+When the jobs endpoint reads `status.json == succeeded` **and**
+`job.output_artifact_id is None`, it lands the result in one transaction:
+register the refined `Artifact`, repoint `Dataset.current_model`, stamp
+`finished_at`. Guarded by `select_for_update()` + the null-output check so a
+second poll is a no-op (idempotent) and two concurrent polls can't double-create.
+No client trust: if the client never polls again, the next poll (or a list call)
+still lands it. SQLite locking suffices for the laptop binding; the
+compose/Postgres binding leans on the same row-level lock harder.
+
+### 5.5 API surface
+
+* `POST /api/v1/jobs/` — submit. Body: `{dataset, tool, params?}` (paths never
+  cross the API). Creates `Job(status=queued)`, calls `runner.submit`, returns
+  the job with its `runner_handle`.
+* `GET /api/v1/jobs/{id}/` — poll. Refreshes status from the status file and
+  runs the idempotent landing step on first success.
+* `GET /api/v1/jobs/?dataset=…` / `?project=…` — list.
+* `POST /api/v1/jobs/{id}/cancel/` — terminate the subprocess, mark failed
+  (the `JobRunner` protocol already declares `cancel`; leaving it unimplemented
+  would be a visible gap).
+
+### 5.6 Environment activation + gating — the layered-env reality
+
+`giant.quick_refine` is **not** a bare-PATH binary you can `shutil.which`. The
+one we want ships with **PanDDA2**, inside a **conda env**, and requires CCP4 to
+be set up too. Critically, **CCP4 also ships a PanDDA1 `giant.refine`** — so a
+naive "source CCP4, then `which`" finds the *wrong* tool. Getting the layering
+right is part of correctness, not just setup.
+
+**Activation recipe (the layering): source CCP4 first, THEN activate the conda
+env**, so the PanDDA2 env's tools take precedence over CCP4's PanDDA1 ones:
+
+```sh
+#!/bin/sh
+set -e
+# --- activation prologue (host-specific, supplied via env, NOT hardcoded) ---
+[ -n "$CCP4_SETUP_SH" ] && . "$CCP4_SETUP_SH"
+[ -n "$CONDA_SH" ] && . "$CONDA_SH" && conda activate "$PANDDA2_CONDA_ENV"
+# --- now the PanDDA2 giant.quick_refine is on PATH ---
+giant.quick_refine <resolved args> > job.log 2>&1
+echo "$?" > exit_code           # wrapper then writes status.json (§5.1)
+```
+
+The recipe reaches the runner as **environment variables** (the §5.7 mechanism),
+so the runner stays generic and host-knowledge lives outside it / outside the
+`JobSpec`:
+
+```
+CCP4_SETUP_SH      e.g. /Applications/ccp4-9/bin/ccp4.setup-sh
+CONDA_SH           e.g. ~/miniconda3/etc/profile.d/conda.sh
+PANDDA2_CONDA_ENV  e.g. pandda2
+```
+
+This is the `JobRunner` seam doing its job: *where* CCP4 lives, *which* conda
+env, *how* to activate — all "where/how", which the seam absorbs so the API
+contract carries only "what". A different host (or the compose amd64 runner)
+supplies a different prologue; nothing above the seam changes.
+
+**Gating = a dry-run probe at submit, not `shutil.which`.** Before dispatching,
+the runner runs the prologue + `command -v giant.quick_refine` in the activated
+shell. Success → dispatch enabled. Failure → the job is marked `failed` (and the
+UI gates dispatch) with a clear "PanDDA2 refine not available — check activation
+(CCP4_SETUP_SH / CONDA_SH / PANDDA2_CONDA_ENV)" message. The probe catches BOTH
+the missing-environment case AND the PanDDA1-vs-PanDDA2 mixup, which a bare
+`which` would mask. Absent a working environment, the inspect + build loop is
+unaffected — only dispatch is gated.
+
+**Tests stay CCP4-free**: a hermetic test sets an empty prologue and points the
+tool at a trivial command (e.g. `cp`/`printf`), exercising the full
+submit→status-file→land→repoint loop with no CCP4/conda. Activation is just
+"more prologue", not a different mechanism — so the test path and the real path
+share one code path.
+
+### 5.7 Config via environment variables — and why that fits every binding
+
+Configuration crosses into the backend as **environment variables**, which is
+the natural seam for *all* bindings, not a deployment wart:
+
+* **Electron** computes per-user paths (`app.getPath('userData')` →
+  `~/Library/Application Support/<app>` on macOS) and injects them when it
+  `spawn`s the bundled backend (`spawn(bin, [], {env: {...}})`).
+* **docker-compose** sets the same names under `environment:`.
+* **Dev** just `export`s them (or relies on the defaults).
+
+Same backend, same mechanism, different *injector* — the §3 "one contract, many
+bindings" point, reinforced.
+
+The current `settings.py` does NOT yet read them — it hardcodes `PANDDA_DATA_ROOT`
+to a laptop path and pins SQLite to `BASE_DIR`. **That** is what breaks the
+Electron handover, not env vars per se: a code-signed macOS `.app` bundle is
+**read-only**, so a backend writing SQLite/jobs next to itself fails. Step 3
+therefore makes the runtime *paths* env-driven, defaulting **writable** ones to a
+user-writable location (never the bundle):
+
+```python
+import os
+DATABASES["default"]["NAME"] = os.environ.get(
+    "PANDDA_DB_PATH", BASE_DIR / "db.sqlite3")
+PANDDA_DATA_ROOT = Path(os.environ.get("PANDDA_DATA_ROOT", BASE_DIR / "data"))
+PANDDA_JOBS_ROOT = Path(os.environ.get("PANDDA_JOBS_ROOT", PANDDA_DATA_ROOT))
+# Refinement activation prologue (§5.6) — host-specific, NOT a bare binary path.
+CCP4_SETUP_SH     = os.environ.get("CCP4_SETUP_SH", "")
+CONDA_SH          = os.environ.get("CONDA_SH", "")
+PANDDA2_CONDA_ENV = os.environ.get("PANDDA2_CONDA_ENV", "")
+REFINE_TOOL       = os.environ.get("REFINE_TOOL", "giant.quick_refine")
+```
+
+Defaults preserve today's dev behaviour; the bindings override. The jobs feature
+forces `PANDDA_JOBS_ROOT` into existence, so doing the *paths* properly once now
+avoids a second pass. Note `REFINE_TOOL` is the tool *name* invoked **after**
+activation (so tests can override it with a trivial command), not a PATH probe —
+detection is the §5.6 dry-run probe. **Deferred to the binding steps (#5/#6)**,
+where they are actually exercised: env-driving `SECRET_KEY` / `DEBUG` /
+`ALLOWED_HOSTS` / CORS.
+
+A note on the two "apps": only the **Django backend** (a spawned process) reads
+env at runtime. The **Vite/React client** bakes `import.meta.env.*` at *build*
+time and a packaged static bundle can't read runtime env — but it only needs the
+API base URL, which is **same-origin** in both bindings (Electron and nginx serve
+the built client and proxy `/api`). So the client needs ~no runtime config,
+sidestepping the static-bundle-can't-read-env trap entirely.
 ```
