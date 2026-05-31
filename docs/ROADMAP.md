@@ -111,21 +111,28 @@ divergence — desktop and cloud from the same contract.
   *how you get progress* is the most backend-specific part (local tail vs qsub
   logfile vs cloud API). PanDDA2 progress signal = `processed_datasets/*` count
   vs input count (backend-agnostic); it has no clean machine-readable stream.
-- **CCP4i2 backend-fit study**: evaluate how cleanly PanDDA's event/site model
-  maps onto CCP4i2's Job/File schema — a candidate implementation behind the
-  `DataStore`/`JobRunner` contract. Worth a rigorous, sceptical look so the
-  conclusion is earned rather than assumed.
+- **Backend-fit studies (peer candidates)**: evaluate how cleanly PanDDA's
+  event/site model and compute needs map onto established platforms that could
+  implement the `DataStore`/`JobRunner` contract — each a first-class candidate,
+  studied on equal terms:
+  - **CCP4Cloud** — its project/job and data-management model as a hosted
+    backend and execution environment.
+  - **CCP4i2** — its Job/File schema and task framework as a backend.
+
+  Each study should be rigorous and even-handed, so any conclusion is earned
+  rather than assumed; the aim is to find the cleanest path to interoperating
+  with whichever platform(s) a deployment already uses.
 
 ## Background context (not to lose)
 - **Strategy**: this is an API-first reference for pandda.inspect. The API
   contract is the deliverable; storage and compute backends
   (`DataStore`/`JobRunner`) are swappable implementations; clients (Moorhen web,
   Coot, CCP4i2, CLI) consume the same contract. The aim is to keep the contract
-  stable and backend-neutral so any platform — CCP4i2 / CCP4Cloud very much
-  included — can serve or be served by it. Demonstrations should stay
+  stable and backend-neutral so any platform — CCP4Cloud, CCP4i2, and others very
+  much included — can serve or be served by it. Demonstrations should stay
   implementation-neutral and emphasise interoperability over any one stack.
 - **Collaboration posture**: this work aims to complement the CCP4 ecosystem and
   the wider pandda.inspect effort, not compete with it. Keep the contract and any
   demonstrations backend-neutral so the project interoperates cleanly with
-  CCP4i2, CCP4Cloud, and other tools — the goal is a shared, stable contract that
+  CCP4Cloud, CCP4i2, and other tools — the goal is a shared, stable contract that
   any of them can adopt or serve.
