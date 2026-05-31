@@ -42,6 +42,22 @@ class Dataset(models.Model):
     r_work = models.FloatField(null=True, blank=True)
     map_uncertainty = models.FloatField(null=True, blank=True)
 
+    # The best model for the WHOLE crystal — a refined pdb (you refine the
+    # whole asymmetric unit against one dataset's reflections). Distinct from
+    # Event.current_model, which is a ligand built into one event's density.
+    # See docs/DESIGN-artifacts-and-jobs.md §1.2.
+    current_model = models.ForeignKey(
+        "Artifact",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    # Raised by a re-ingest when the underlying imported bytes changed while
+    # current_model points at a human/job artifact — "the analysis under this
+    # built model changed; a human should look" (surface, don't resolve, §1.3).
+    inputs_changed = models.BooleanField(default=False)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -105,6 +121,20 @@ class Event(models.Model):
     inspected_by = models.CharField(max_length=255, blank=True, default="")
     inspected_at = models.DateTimeField(null=True, blank=True)
 
+    # The best model for THIS event's density — a ligand built into the local
+    # density (you build per-event, but refine per-crystal; cf.
+    # Dataset.current_model). See docs/DESIGN-artifacts-and-jobs.md §1.2.
+    current_model = models.ForeignKey(
+        "Artifact",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    # Re-ingest flag, as for Dataset: set when imported bytes changed under a
+    # human/job artifact this event points at (surface, don't resolve, §1.3).
+    inputs_changed = models.BooleanField(default=False)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -133,6 +163,16 @@ class Artifact(models.Model):
         LIGAND = "ligand", "Ligand dictionary"
         REPORT_HTML = "report_html", "HTML report"
 
+    class Origin(models.TextChoices):
+        # How these bytes came to exist. ``imported`` artifacts are
+        # discovered by an ingest reader walking the PanDDA tree;
+        # ``built``/``refined`` ones are produced after ingest (a
+        # human-built ligand, a refinement job) and are write-once — a new
+        # model is a NEW row, never a mutation of an old one.
+        IMPORTED = "imported", "Imported (from PanDDA output)"
+        BUILT = "built", "Built (human, e.g. ligand placed in Moorhen)"
+        REFINED = "refined", "Refined (job output, e.g. giant.quick_refine)"
+
     # Project-level artifacts (e.g. report HTML) attach to the project with no
     # dataset; dataset/event artifacts set the relevant FK.
     project = models.ForeignKey(
@@ -159,6 +199,33 @@ class Artifact(models.Model):
     )
     kind = models.CharField(max_length=20, choices=Kind.choices)
     relpath = models.CharField(max_length=1024)
+
+    # --- lineage (see docs/DESIGN-artifacts-and-jobs.md §1) ---
+    origin = models.CharField(
+        max_length=16, choices=Origin.choices, default=Origin.IMPORTED
+    )
+    # What these bytes were derived from. The chain
+    # ``imported ← built ← refined`` is just ``parent`` links; walking it
+    # gives full history, while Event/Dataset.current_model gives "best
+    # right now" in one hop. Null for imports (the root of every lineage).
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="derived",
+        null=True,
+        blank=True,
+    )
+    # The dispatched action that produced these bytes. Null for imports AND
+    # for interactive builds (#4 ligand-build is client-side, not a Job) —
+    # those are distinguished by ``origin``. Set only for job outputs.
+    produced_by = models.ForeignKey(
+        "Job",
+        on_delete=models.SET_NULL,
+        related_name="outputs",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["kind", "relpath"]
@@ -190,3 +257,71 @@ class Shell(models.Model):
 
     def __str__(self):
         return f"{self.project.name}/{self.label}"
+
+
+class Job(models.Model):
+    """
+    A tracked compute task (refinement, analysis, …) — the single door
+    through which job-produced bytes enter the system.
+
+    The API hands a JobSpec to a JobRunner (``jobs.py``) and gets back an
+    opaque ``runner_handle`` it polls; on success the output bytes are
+    registered as a write-once ``Artifact(produced_by=self)`` and the
+    relevant ``current_model`` pointer is repointed. This is what makes
+    dispatch consistent with the artifact-tracking model — there is no other
+    way for a job to surface output. See docs/DESIGN-artifacts-and-jobs.md §2.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    tool = models.CharField(max_length=64)  # e.g. "giant.quick_refine"
+    # Refinement is dataset-scoped (whole crystal); some jobs are event-scoped.
+    # Both nullable so the FK granularity matches the tool.
+    dataset = models.ForeignKey(
+        Dataset,
+        on_delete=models.CASCADE,
+        related_name="jobs",
+        null=True,
+        blank=True,
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="jobs",
+        null=True,
+        blank=True,
+    )
+    # The JobSpec — WHAT to compute (tool/inputs/params), never WHERE. Paths
+    # and scheduler flags belong to the JobRunner, not here (jobs.JobSpec).
+    spec = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.QUEUED
+    )
+    # Opaque id returned by JobRunner.submit() — a PID, a qsub id, a cloud
+    # handle. The API polls JobRunner.status(runner_handle); it never
+    # interprets this string.
+    runner_handle = models.CharField(max_length=255, blank=True, default="")
+    # Set on success. The lineage parent lives on the Artifact (parent FK);
+    # this is the job's own pointer to what it produced.
+    output_artifact = models.ForeignKey(
+        "Artifact",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    # Relpath (under the project source_root) of the captured stdout/stderr.
+    log_relpath = models.CharField(max_length=1024, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        scope = self.dataset.dtag if self.dataset else "project"
+        return f"{self.tool}:{scope}:{self.status}"

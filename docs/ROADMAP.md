@@ -38,31 +38,56 @@ Rule learned (from the 120 MB WASM purge): **do not vendor large data into git**
 Remaining: wire a documented fetch script + remove any private-data assumptions
 from the default data path.
 
-### 2. Ground-truth / artifact-storage model — ◧ DECIDE NEXT (foundation for #4)
+### 2. Ground-truth / artifact-storage model — ✅ DESIGNED (see DESIGN doc)
 The prototype wrote built models to disk + updated Redux but never updated
-`results.json` → drift. Principle to implement:
-- **DB = ground truth** for mutable state, incl. a *pointer to current-best
-  artifact*.
-- **Artifact bytes in the DataStore, versioned / write-once** (never overwrite;
-  write v2, repoint the DB).
-- **Imported JSON/CSV/YAML = read-only frozen import artifacts** — never written
-  back. No drift *if* the filesystem stops being a source of truth post-ingest.
-- **Hard residual**: re-ingest / PanDDA-rerun **reconciliation policy** — does a
-  rerun wipe / merge / version human-built models? This is the real design core.
-This is a *decision*, best made deliberately before building #4.
+`results.json` → drift. **Design agreed and written up in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md)** — that doc is now
+the design of record for #2, the `JobRunner` seam (#4-adjacent), and the two
+deployment bindings. Decisions locked:
+- **DB = ground truth**; lineage lives on `Artifact` itself (self-FK `parent` +
+  `origin`/`produced_by`), not a separate version table. Pointers split by
+  granularity: `Event.current_model` (built ligand) vs `Dataset.current_model`
+  (refined whole pdb) — mirrors build-per-event / refine-per-crystal.
+- **Write-once** is mechanical: built/refined = new row + new bytes; pointer
+  moves, old row never mutated.
+- **Imported JSON/CSV/YAML = frozen import artifacts** — never written back.
+- **Reconciliation (the real core): re-ingest is additive + import-scoped** —
+  replaces `origin=imported` rows, updates machine metrics, leaves human
+  decisions and built/refined models untouched, and *flags* divergence
+  (`inputs_changed`) rather than auto-resolving it ("surface, don't resolve").
+Implementation order is in §4 of the DESIGN doc; schema (items 1–2) lands before
+the job/build features (#4) so artifact-producing actions can't predate the
+lineage model.
 
 ### 3. Back-to-app continuity — ○ QUICK WIN
 InspectPage is full-bleed (`position:absolute; inset:0`) so app chrome vanishes.
 Add a floating "← Back to {project}" Fab top-left (high z-index) — NOT a full
 AppBar (it steals canvas height). ~15 lines.
 
-### 4. "Add current ligand at current location" → auto-swap decision to Hit — ○ FEATURE (after #2)
+### 4. "Add current ligand at current location" → auto-swap decision to Hit — ◧ DESIGNED (after #2 schema)
 Reuse the prototype Coot-call IDEA (proven on Moorhen 0.23):
 `cootCommand get_monomer_and_position_at ["LIG", molNo, ...origin negated]`
 → `theMolecule.fitLigand(activeMap.molNo, ligandMol.molNo, …)`
 → `merge_molecules` → redraw. Building a ligand *is* the hit assertion → fire
 the decision PATCH automatically. **Produces the artifact #2 governs — don't
-build before #2 settles, or it recreates the drift bug.**
+build before #2 settles, or it recreates the drift bug.** Now designed in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) §2.2: #4 is
+*interactive* (no `Job` row) and registers its output as
+`Artifact(origin=built, parent=<input>, produced_by=null)` repointing
+`Event.current_model` — same artifact contract as a dispatched job, different
+producer.
+
+### 4b. Task dispatch / tracking (`giant.quick_refine`) + Electron & compose bindings — ◧ DESIGNED
+New scope captured this session, all in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md): a real `Job`
+model + `JobRunner` lit up (`LocalProcessRunner` shells out to
+`giant.quick_refine`, env-detected/gated); a **handover Electron app** (bundled
+frozen-Python backend via PyInstaller, CI-built installer) that exercises the
+full inspect → build → refine → land-artifact loop; and a **docker-compose
+binding** of the *same* backend (native-arch `web` + amd64 CCP4 `runner` sidecar
++ shared-volume `SharedVolumeRunner`, cross-arch enabled from the start) that
+*proves* the "code once, deploy many scenarios" claim via the seam diff. See
+DESIGN §2–3 and the implementation order in §4.
 
 ### 5. Real PanDDA2 analysis + reconcile data model — ✅ DONE (run + row-level diff complete)
 The BAZ2B run finished (309 events, 41 sites); a separate `ingest_pandda2`
