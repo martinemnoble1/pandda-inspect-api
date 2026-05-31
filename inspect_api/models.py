@@ -200,6 +200,17 @@ class Artifact(models.Model):
     kind = models.CharField(max_length=20, choices=Kind.choices)
     relpath = models.CharField(max_length=1024)
 
+    # Embedded bytes, for SMALL structured reference artifacts only —
+    # currently ligand restraint dictionaries (~10 KB). Most artifacts (maps,
+    # MTZ, coords) stay on disk and leave this blank; the download view streams
+    # those by ``relpath``. We embed ligand CIFs because they are small AND
+    # live in the original ``data/`` tree OUTSIDE the project source_root
+    # (reachable only via absolute symlinks), so a clean relpath can't address
+    # them — embedding sidesteps the traversal guard and makes the dict
+    # self-contained (survives the data/ tree moving post-ingest). When set,
+    # the download view serves this instead of reading ``relpath`` off disk.
+    contents = models.TextField(blank=True, default="")
+
     # --- lineage (see docs/DESIGN-artifacts-and-jobs.md §1) ---
     origin = models.CharField(
         max_length=16, choices=Origin.choices, default=Origin.IMPORTED

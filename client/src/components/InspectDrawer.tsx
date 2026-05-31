@@ -121,6 +121,21 @@ export function InspectDrawer({
           if (model) {
             const mol = newMolecule(commandCentre, store);
             await mol.loadToCootFromURL(api.artifactUrl(model), ev.dtag);
+            // Load the ligand restraint dictionary BEFORE drawing, so the LIG
+            // residue bonds/refines correctly. Without it, Moorhen auto-fetches
+            // monomers/l/LIG.cif (a 404) and draws bare atoms. Our dict is
+            // embedded in the DB (data/<dtag>/ligand.cif) and served as text.
+            const lig = artifactOf(ev, "ligand");
+            if (lig) {
+              try {
+                const cif = await fetch(api.artifactUrl(lig)).then((r) =>
+                  r.ok ? r.text() : ""
+                );
+                if (cif) await mol.addDict(cif);
+              } catch {
+                // Non-fatal: fall back to bare-atom rendering.
+              }
+            }
             await mol.addRepresentation("CBs", "/*/*");
             dispatch(addMolecule(mol as any));
           }

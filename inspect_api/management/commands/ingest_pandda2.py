@@ -197,15 +197,21 @@ class Command(BaseCommand):
                 out.append(
                     ArtifactSpec(kind, f"{PROCESSED}/{dtag}/{fname}")
                 )
-        lig_dir = ddir / "ligand_files"
-        if lig_dir.is_dir():
-            for lig in sorted(lig_dir.glob("*.cif")):
-                out.append(
-                    ArtifactSpec(
-                        Artifact.Kind.LIGAND,
-                        f"{PROCESSED}/{dtag}/ligand_files/{lig.name}",
-                    )
+        # Ligand restraint dictionary. PanDDA2's ligand_files/ is often empty;
+        # the canonical CIF lives in the ORIGINAL data tree at
+        # data/<dtag>/ligand.cif, reachable by resolving the -pandda-input.pdb
+        # symlink (which points into data/<dtag>/). It's outside source_root,
+        # so we EMBED its bytes, not a path (see Artifact.contents
+        # + docs). Falls back to any ligand_files/*.cif if present.
+        cif = Command._find_ligand_cif(ddir, dtag)
+        if cif is not None:
+            out.append(
+                ArtifactSpec(
+                    Artifact.Kind.LIGAND,
+                    relpath=f"{PROCESSED}/{dtag}/ligand.cif",
+                    contents=cif,
                 )
+            )
         # The analysis's merged model (autobuild). A STRUCTURE artifact, but
         # origin=imported (re-derivable analysis output). Catalogued here so
         # the download view can serve it; set as current_model in reconcile so
@@ -225,6 +231,36 @@ class Command(BaseCommand):
         rel = f"{PROCESSED}/{dtag}/modelled_structures/{dtag}-pandda-model.pdb"
         return rel if (processed_dir / dtag / "modelled_structures"
                        / f"{dtag}-pandda-model.pdb").exists() else None
+
+    @staticmethod
+    def _find_ligand_cif(ddir: Path, dtag: str) -> str | None:
+        """Return the ligand restraint CIF *contents*, or None.
+
+        Looks first in the original data tree (data/<dtag>/ligand.cif), located
+        by resolving the -pandda-input.pdb symlink to its data/<dtag>/ dir; then
+        falls back to any ligand_files/*.cif inside the processed dir. Returns
+        the file text (embedded in the DB). Tolerates SMILES-only / missing
+        dicts by returning None — those datasets are flagged by the caller.
+        """
+        candidates = []
+        # 1. data/<dtag>/ligand.cif via the resolved input-pdb symlink.
+        input_pdb = ddir / f"{dtag}-pandda-input.pdb"
+        try:
+            data_dir = input_pdb.resolve().parent
+            candidates.append(data_dir / "ligand.cif")
+        except OSError:
+            pass
+        # 2. Fallback: ligand_files/*.cif inside the processed dataset dir.
+        lig_dir = ddir / "ligand_files"
+        if lig_dir.is_dir():
+            candidates.extend(sorted(lig_dir.glob("*.cif")))
+        for cif in candidates:
+            try:
+                if cif.is_file():
+                    return cif.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        return None
 
     # --- helpers ---
 

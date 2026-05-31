@@ -4,7 +4,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import models
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import mixins, viewsets
@@ -162,8 +162,17 @@ class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
-        """Stream the artifact's bytes from the DataStore (local FS here)."""
+        """Stream the artifact's bytes — from the DB if embedded (small
+        dictionaries), else from the DataStore (local FS here)."""
         artifact = self.get_object()
+        # Embedded artifacts (ligand CIFs) carry their bytes in the DB and live
+        # outside source_root — serve directly, no path resolution/guard.
+        if artifact.contents:
+            resp = HttpResponse(
+                artifact.contents, content_type="chemical/x-cif"
+            )
+            resp["Cross-Origin-Resource-Policy"] = "same-origin"
+            return resp
         project = artifact.owning_project
         if project is None:
             raise Http404("Artifact has no owning project")

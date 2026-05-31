@@ -42,6 +42,9 @@ INPUT_KINDS = (Artifact.Kind.STRUCTURE, Artifact.Kind.DATA_MTZ)
 class ArtifactSpec:
     kind: str
     relpath: str
+    # Optional embedded bytes for small dictionaries (ligand CIFs). When set,
+    # stored in Artifact.contents and served from the DB rather than disk.
+    contents: str = ""
 
 
 @dataclass
@@ -233,6 +236,7 @@ def _replace_imported_dataset_artifacts(project, dataset, ds_spec) -> set:
             dataset=dataset,
             kind=a.kind,
             relpath=a.relpath,
+            contents=a.contents,
             origin=Artifact.Origin.IMPORTED,
         )
     return _imported_input_relpaths(dataset)
