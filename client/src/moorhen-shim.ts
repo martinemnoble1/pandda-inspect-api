@@ -37,6 +37,12 @@ export interface MoorhenMoleculeLike {
   addRepresentation(style: string, cid: string): Promise<unknown>;
   delete(): Promise<unknown>;
   addDict(dict: string): Promise<unknown>;
+  // After addDict, Coot must RE-PERCEIVE bonds so aromatic/double orders from
+  // the dictionary are drawn (addDict alone doesn't redraw). Mark atoms dirty
+  // then re-fetch+draw — the proven 0.23 sequence. Without this the ligand
+  // renders all-single-bonds even with a correct dict.
+  setAtomsDirty(state: boolean): void;
+  fetchIfDirtyAndDraw(style: string): Promise<unknown>;
 }
 export interface MoorhenMapLike {
   name: string;
