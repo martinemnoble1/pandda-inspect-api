@@ -7,7 +7,7 @@ and [client/PANDDA2_INTEGRATION.md](../client/PANDDA2_INTEGRATION.md)
 (Moorhen/PanDDA2 client specifics). This file is the single place for *what's
 next and in what order*.
 
-Last updated: 2026-05-31.
+Last updated: 2026-05-31 (main @ `e330b6c`).
 
 ## Where we are (snapshot)
 
@@ -15,6 +15,24 @@ Last updated: 2026-05-31.
   Shell) + React/Moorhen client (landing, import, project browser, dashboard
   with report iframes, Moorhen inspect view with grouped accordion drawer,
   contour control, decision PATCH). Public repo, clean history.
+- **Inspect-drawer triage & navigation UX — DONE this session** (see new §7):
+  dataset-header chips (#events / built / #hits / quality = best 1−BDC), a Sort
+  dropdown, a 3-state Active/With-events/All filter (Active hides all-`no_hit`
+  datasets), prev/next nav across dataset boundaries with the accordion
+  following the live event, and autobuild-backed event chips visually
+  differentiated.
+- **Per-event autobuild ingested — DONE this session**: `ingest_pandda2` now
+  parses each event's `events.yaml` `Build:` block into an event-scoped
+  `LIGAND_POSE` artifact + `build_score`/`rscc`/`optimal_contour` on the Event
+  (migration 0007; covered by `test_event_autobuild.py`). The contour slider
+  seeds from `optimal_contour`. **Model-of-record decision settled** (CLAUDE.md
+  + the per-event-vs-crystal-model memory): the pose is overlay/provenance;
+  refinement targets the per-crystal `Dataset.current_model`, never a per-event
+  ligand-only fragment. This is the groundwork the #4/#4b build+refine loop sits
+  on.
+- **Immediate next: #4 / #4b** — the artifact-*producing* paths. Schema + seam
+  exist; the viewer doesn't yet drive them (`loadEvent` still centres on
+  `xyz_centroid`, not the pose; no build/refine action calls a `Job`).
 - **Public dataset resolved & fetched**: BAZ2B vs Zenobia fragment library,
   Zenodo DOI 10.5281/zenodo.48768, **CC-BY-SA-4.0**, 201 datasets. Living at
   `~/Developer/pandda-data/BAZ2B-zenodo-48768/` (OUTSIDE the repo — ShareAlike
@@ -133,6 +151,27 @@ Many users want a self-contained laptop/desktop install. Electron is simply the
 SQLite + client, wired to `LocalFileStore` + `LocalProcessRunner`. The value is
 that one codebase serves both a desktop install and a hosted deployment with no
 divergence — desktop and cloud from the same contract.
+
+### 7. Inspect-drawer triage & navigation UX — ✅ DONE (2026-05-31, main @ e330b6c)
+The grouped accordion drawer became a real triage surface, all client-side in
+`client/src/components/InspectDrawer.tsx` + `client/src/grouping.ts`:
+- **Dataset-header chips**: #events, `built` (event has an autobuilt ligand
+  pose), #hits, and quality `Q X%` = best 1−BDC across the dataset's events.
+- **Sort dropdown**: name (numeric-aware) | #events | autobuilt | best quality.
+- **3-state filter**: Active → With events → All. *Active* hides datasets whose
+  every event is `no_hit` ("finished triaging as dead").
+- **Navigation**: prev/next step through the flattened filtered+sorted event
+  order **across dataset boundaries** (icon-only `< >` + `i/N` counter); the
+  accordion **follows the live event** — opens the new dataset, closes the old.
+- **Per-event autobuild surfacing**: event chips backed by a `LIGAND_POSE` get
+  a build icon + info-tinted border + RSCC in the tooltip; the contour slider
+  seeds from the event's `optimal_contour`.
+- Ingest side (the `LIGAND_POSE` + build-metrics parsing this UX reads) is
+  tested in `inspect_api/tests/test_event_autobuild.py`. Client UI itself is
+  untested — a Vitest setup is a later add.
+- **Not yet**: the viewer doesn't consume the pose for centring/overlay
+  (`loadEvent` centres on `xyz_centroid`); that, plus the build/refine actions,
+  is #4/#4b.
 
 ## Parked ideas (revisit later)
 - **RDKit "navigate by built compound" gallery**: once events are *interpreted*
