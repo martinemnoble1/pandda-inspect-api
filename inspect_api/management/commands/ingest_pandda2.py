@@ -17,8 +17,12 @@ The internal Dataset/Event/Artifact/Shell model is unchanged — only the *reade
 differs. That the contract survives a completely different on-disk format is the
 import-boundary abstraction doing its job.
 
-Idempotent per project name (replaces prior rows; a real implementation would
-reconcile rather than clobber — see README).
+This command's job is purely to parse the PanDDA2 tree into the normalized
+``reconcile.ProjectSpec``; :mod:`inspect_api.reconcile` then applies the
+re-ingest policy (additive, import-scoped; preserves human decisions and
+built/refined models; flags input drift — see
+docs/DESIGN-artifacts-and-jobs.md §1.3). Re-running is therefore safe: it
+no longer clobbers decision state.
 
 Observations baked in from a real BAZ2B run (Zenodo 48768, 2026-05-30):
   * dataset-level metrics (resolution, R-factors, map uncertainty) appear on
@@ -35,9 +39,15 @@ from collections import defaultdict
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 
-from inspect_api.models import Artifact, Dataset, Event, Project
+from inspect_api.models import Artifact
+from inspect_api.reconcile import (
+    ArtifactSpec,
+    DatasetSpec,
+    EventSpec,
+    ProjectSpec,
+    reconcile_project,
+)
 
 PROCESSED = "processed_datasets"
 ANALYSES = "analyses"
@@ -55,7 +65,6 @@ class Command(BaseCommand):
             "and analyses/).",
         )
 
-    @transaction.atomic
     def handle(self, *args, **opts):  # noqa: ARG002 (Command signature)
         name = opts["project"]
         root = Path(opts["root"]).expanduser().resolve()
@@ -70,13 +79,36 @@ class Command(BaseCommand):
         if not rows:
             raise CommandError(f"{events_csv} has no event rows.")
 
-        # Replace any prior ingest of this project.
-        Project.objects.filter(name=name).delete()
-        project = Project.objects.create(name=name, source_root=str(root))
+        spec = self._build_spec(name, root, rows)
+        res = reconcile_project(spec)
 
-        # --- Datasets: union of every dtag with a processed dir AND every dtag
-        # appearing in the event CSV (a dataset can be processed with 0 events,
-        # or — defensively — appear in the CSV without a dir). ---
+        n_event_maps = sum(
+            1 for d in spec.datasets for e in d.events if e.event_map_relpath
+        )
+        verb = "Ingested" if res.created else "Re-ingested"
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"{verb} PanDDA2 '{name}': {res.n_datasets} datasets, "
+                f"{res.n_events} events, {n_event_maps} event maps, "
+                f"{res.n_imported_artifacts} imported artifacts."
+            )
+        )
+        if not res.created:
+            self.stdout.write(
+                f"  Preserved {res.n_decisions_preserved} human decisions, "
+                f"{res.n_built_preserved} built/refined models; "
+                f"flagged {res.n_inputs_changed} as inputs_changed."
+            )
+
+    def _build_spec(self, name, root, rows) -> ProjectSpec:
+        """Parse the PanDDA2 tree into a normalized ProjectSpec.
+
+        No DB writes here — the import boundary's only job is to turn the
+        on-disk format into the shared spec; reconcile.py owns persistence.
+        """
+        # --- Datasets: union of every dtag with a processed dir AND every
+        # dtag in the event CSV (a dataset can be processed with 0 events, or
+        # — defensively — appear in the CSV without a dir). ---
         processed_dir = root / PROCESSED
         dirs = (
             {p.name for p in processed_dir.iterdir() if p.is_dir()}
@@ -92,109 +124,86 @@ class Command(BaseCommand):
         for r in rows:
             first_row.setdefault(r["dtag"], r)
 
-        datasets = {}
-        for dtag in all_dtags:
-            r = first_row.get(dtag, {})
-            datasets[dtag] = Dataset.objects.create(
-                project=project,
-                dtag=dtag,
-                analysed_resolution=_f(r.get("analysed_resolution")),
-                high_resolution=_f(r.get("high_resolution")),
-                low_resolution=_f(r.get("low_resolution")),
-                r_free=_f(r.get("r_free")),
-                r_work=_f(r.get("r_work")),
-                map_uncertainty=_f(r.get("map_uncertainty")),
-            )
-
-        # --- Events ---
-        n_events = 0
-        n_event_maps = 0
-        # Accumulate event coordinates per site to derive site centroids (the
-        # CSV site centroids are unreliable — often (0,0,0)).
-        site_points = defaultdict(list)
-
+        # Group event rows by dtag.
+        rows_by_dtag = defaultdict(list)
         for r in rows:
-            ds = datasets.get(r["dtag"])
-            if ds is None:
-                continue
+            rows_by_dtag[r["dtag"]].append(r)
+
+        datasets = []
+        for dtag in all_dtags:
+            r0 = first_row.get(dtag, {})
+            ds_spec = DatasetSpec(
+                dtag=dtag,
+                metrics={
+                    "analysed_resolution": _f(r0.get("analysed_resolution")),
+                    "high_resolution": _f(r0.get("high_resolution")),
+                    "low_resolution": _f(r0.get("low_resolution")),
+                    "r_free": _f(r0.get("r_free")),
+                    "r_work": _f(r0.get("r_work")),
+                    "map_uncertainty": _f(r0.get("map_uncertainty")),
+                },
+                events=self._build_events(root, dtag, rows_by_dtag[dtag]),
+                artifacts=self._dataset_artifacts(processed_dir, dtag),
+            )
+            datasets.append(ds_spec)
+
+        return ProjectSpec(
+            name=name, source_root=str(root), datasets=datasets
+        )
+
+    def _build_events(self, root, dtag, rows) -> list:
+        events = []
+        for r in rows:
             event_idx = _i(r.get("event_idx"))
             xyz = [_f(r.get("x")), _f(r.get("y")), _f(r.get("z"))]
-            site_idx = _i(r.get("site_idx"))
-            event = Event.objects.create(
-                dataset=ds,
-                event_num=event_idx,
-                site_num=site_idx,
-                bdc=_f(r.get("bdc")),
-                z_peak=_f(r.get("z_peak")),
-                z_mean=_f(r.get("z_mean")),
-                cluster_size=_i(r.get("cluster_size")),
-                map_resolution=_f(r.get("analysed_resolution")),
-                score=_f(r.get("hit_in_site_probability")),
-                interesting=_b(r.get("interesting")),
-                xyz_centroid=[c for c in xyz if c is not None] or [],
-                xyz_peak=[],
-            )
-            n_events += 1
-            if site_idx is not None and all(c is not None for c in xyz):
-                site_points[site_idx].append(xyz)
-
-            # Event maps: match by the CSV's 1-BDC token, else any event_N map.
-            relpath = self._find_event_map(
-                root, r["dtag"], event_idx, r.get("1-BDC")
-            )
-            if relpath:
-                Artifact.objects.create(
-                    project=project,
-                    dataset=ds,
-                    event=event,
-                    kind=Artifact.Kind.EVENT_MAP,
-                    relpath=relpath,
+            events.append(
+                EventSpec(
+                    event_num=event_idx,
+                    site_num=_i(r.get("site_idx")),
+                    metrics={
+                        "bdc": _f(r.get("bdc")),
+                        "z_peak": _f(r.get("z_peak")),
+                        "z_mean": _f(r.get("z_mean")),
+                        "cluster_size": _i(r.get("cluster_size")),
+                        "map_resolution": _f(r.get("analysed_resolution")),
+                        "score": _f(r.get("hit_in_site_probability")),
+                        "interesting": _b(r.get("interesting")),
+                        "xyz_centroid": [c for c in xyz if c is not None]
+                        or [],
+                        "xyz_peak": [],
+                    },
+                    event_map_relpath=self._find_event_map(
+                        root, dtag, event_idx, r.get("1-BDC")
+                    ),
                 )
-                n_event_maps += 1
-
-        # --- Per-dataset artifacts (input structure + data, z-map, ligands) ---
-        n_artifacts = 0
-        for dtag, ds in datasets.items():
-            ddir = processed_dir / dtag
-            if not ddir.is_dir():
-                continue
-            for fname, kind in (
-                (f"{dtag}-pandda-input.pdb", Artifact.Kind.STRUCTURE),
-                (f"{dtag}-pandda-input.mtz", Artifact.Kind.DATA_MTZ),
-                (f"{dtag}-z_map.native.ccp4", Artifact.Kind.OUTPUT_MTZ),
-            ):
-                if (ddir / fname).exists():
-                    Artifact.objects.create(
-                        project=project,
-                        dataset=ds,
-                        kind=kind,
-                        relpath=f"{PROCESSED}/{dtag}/{fname}",
-                    )
-                    n_artifacts += 1
-            lig_dir = ddir / "ligand_files"
-            if lig_dir.is_dir():
-                for lig in sorted(lig_dir.glob("*.cif")):
-                    Artifact.objects.create(
-                        project=project,
-                        dataset=ds,
-                        kind=Artifact.Kind.LIGAND,
-                        relpath=f"{PROCESSED}/{dtag}/ligand_files/{lig.name}",
-                    )
-                    n_artifacts += 1
-
-        # --- Sites: derive centroids from member events (CSV centroids are
-        # unreliable). Stored as Shell-free site provenance for now; first-class
-        # Site model is a future step (see roadmap). We record the count. ---
-        n_sites = len(site_points)
-
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Ingested PanDDA2 '{name}': {len(datasets)} datasets, "
-                f"{n_events} events, {n_event_maps} event maps, "
-                f"{n_artifacts} dataset artifacts, {n_sites} sites "
-                f"(centroids derived from events)."
             )
-        )
+        return events
+
+    @staticmethod
+    def _dataset_artifacts(processed_dir, dtag) -> list:
+        ddir = processed_dir / dtag
+        if not ddir.is_dir():
+            return []
+        out = []
+        for fname, kind in (
+            (f"{dtag}-pandda-input.pdb", Artifact.Kind.STRUCTURE),
+            (f"{dtag}-pandda-input.mtz", Artifact.Kind.DATA_MTZ),
+            (f"{dtag}-z_map.native.ccp4", Artifact.Kind.OUTPUT_MTZ),
+        ):
+            if (ddir / fname).exists():
+                out.append(
+                    ArtifactSpec(kind, f"{PROCESSED}/{dtag}/{fname}")
+                )
+        lig_dir = ddir / "ligand_files"
+        if lig_dir.is_dir():
+            for lig in sorted(lig_dir.glob("*.cif")):
+                out.append(
+                    ArtifactSpec(
+                        Artifact.Kind.LIGAND,
+                        f"{PROCESSED}/{dtag}/ligand_files/{lig.name}",
+                    )
+                )
+        return out
 
     # --- helpers ---
 

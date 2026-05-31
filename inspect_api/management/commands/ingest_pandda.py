@@ -3,20 +3,26 @@ Ingest a PanDDA results.json (+ optional Projects.csv) into the relational
 store. This is the *import boundary*: it runs once per analysis, after which the
 API serves SQL, not the filesystem.
 
-Idempotent: re-running for the same project name replaces its rows but
-preserves nothing of the old decision state (this is a reference — a real
-implementation would reconcile, not clobber; see the README's note on the
-reconciliation problem).
+Like ``ingest_pandda2``, this command only *parses* results.json into the
+normalized ``reconcile.ProjectSpec``; :mod:`inspect_api.reconcile` applies the
+re-ingest policy (additive, import-scoped; preserves human decisions and
+built/refined models; flags input drift — see
+docs/DESIGN-artifacts-and-jobs.md §1.3). Re-running is safe.
 """
 import csv
 import json
 from pathlib import Path
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 
-from inspect_api.models import Artifact, Dataset, Event, Project, Shell
+from inspect_api.models import Artifact
+from inspect_api.reconcile import (
+    ArtifactSpec,
+    DatasetSpec,
+    EventSpec,
+    ProjectSpec,
+    reconcile_project,
+)
 
 
 class Command(BaseCommand):
@@ -30,7 +36,6 @@ class Command(BaseCommand):
             help="Path to the project tree (contains pandda/results.json)",
         )
 
-    @transaction.atomic
     def handle(self, *args, **opts):
         name = opts["project"]
         root = Path(opts["root"]).expanduser().resolve()
@@ -39,94 +44,114 @@ class Command(BaseCommand):
             raise CommandError(f"No results.json at {results_path}")
 
         data = json.loads(results_path.read_text())
+        spec = self._build_spec(name, root, data)
+        res = reconcile_project(spec)
 
-        # Replace any prior ingest of this project.
-        Project.objects.filter(name=name).delete()
-        project = Project.objects.create(name=name, source_root=str(root))
+        n_reports = len(spec.artifacts)
+        verb = "Ingested" if res.created else "Re-ingested"
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"{verb} '{name}': {res.n_datasets} datasets, "
+                f"{res.n_events} events, {res.n_imported_artifacts} imported "
+                f"artifacts ({n_reports} reports), {res.n_shells} shells."
+            )
+        )
+        if not res.created:
+            self.stdout.write(
+                f"  Preserved {res.n_decisions_preserved} human decisions, "
+                f"{res.n_built_preserved} built/refined models; "
+                f"flagged {res.n_inputs_changed} as inputs_changed."
+            )
 
+    def _build_spec(self, name, root, data) -> ProjectSpec:
+        """Parse results.json into a normalized ProjectSpec (no DB writes)."""
         subtitles = self._load_subtitles(root)
-        dataset_records = data.get("dataset_records", {})
+        records = data.get("dataset_records", {})
         output_files = data.get("output_files", {}).get("dataset_files", {})
-        all_dtags = set(output_files) | self._dtags_from_records(dataset_records)
+        all_dtags = set(output_files) | self._dtags_from_records(records)
 
-        datasets = {}
-        for dtag in sorted(all_dtags):
-            datasets[dtag] = Dataset.objects.create(
-                project=project,
-                dtag=dtag,
-                subtitle=subtitles.get(f"xtal-{dtag}", ""),
-                analysed_resolution=self._rec(dataset_records, "analysed_resolution", dtag),
-                high_resolution=self._rec(dataset_records, "high_resolution", dtag),
-                low_resolution=self._rec(dataset_records, "low_resolution", dtag),
-                r_free=self._rec(dataset_records, "r_free", dtag),
-                r_work=self._rec(dataset_records, "r_work", dtag),
-                map_uncertainty=self._rec(dataset_records, "map_uncertainty", dtag),
-            )
-
-        n_events = 0
+        # Events grouped by dtag (results.json lists them flat).
+        events_by_dtag = {}
         for ev in data.get("events", []):
-            dtag = ev["dtag"]
-            ds = datasets.get(dtag)
-            if ds is None:
-                continue
-            event = Event.objects.create(
-                dataset=ds,
-                event_num=ev.get("event_num"),
-                site_num=ev.get("site_num"),
-                event_fraction=ev.get("event_fraction"),
-                bdc=ev.get("bdc"),
-                z_peak=ev.get("z_peak"),
-                z_mean=ev.get("z_mean"),
-                cluster_size=ev.get("cluster_size"),
-                map_resolution=ev.get("map_resolution"),
-                xyz_centroid=ev.get("xyz_centroid", []),
-                xyz_peak=ev.get("xyz_peak", []),
-            )
-            n_events += 1
-            # Event maps are keyed by event_num within the dataset's files.
+            events_by_dtag.setdefault(ev["dtag"], []).append(ev)
+
+        datasets = []
+        for dtag in sorted(all_dtags):
             files = output_files.get(dtag, {})
-            emaps = files.get("event_map_data", {}) or files.get("event_data", {})
-            relpath = emaps.get(str(ev.get("event_num")))
-            if relpath:
-                Artifact.objects.create(
-                    project=project,
-                    dataset=ds,
-                    event=event,
-                    kind=Artifact.Kind.EVENT_MAP,
-                    relpath=self._norm(relpath),
+            datasets.append(
+                DatasetSpec(
+                    dtag=dtag,
+                    subtitle=subtitles.get(f"xtal-{dtag}", ""),
+                    metrics={
+                        "analysed_resolution":
+                            self._rec(records, "analysed_resolution", dtag),
+                        "high_resolution":
+                            self._rec(records, "high_resolution", dtag),
+                        "low_resolution":
+                            self._rec(records, "low_resolution", dtag),
+                        "r_free": self._rec(records, "r_free", dtag),
+                        "r_work": self._rec(records, "r_work", dtag),
+                        "map_uncertainty":
+                            self._rec(records, "map_uncertainty", dtag),
+                    },
+                    events=self._build_events(events_by_dtag.get(dtag, []),
+                                              files),
+                    artifacts=self._dataset_artifacts(files),
                 )
+            )
 
-        n_artifacts = 0
-        for dtag, files in output_files.items():
-            ds = datasets.get(dtag)
-            if ds is None:
-                continue
-            for key, kind in (
-                ("structure", Artifact.Kind.STRUCTURE),
-                ("data", Artifact.Kind.DATA_MTZ),
-                ("output_data", Artifact.Kind.OUTPUT_MTZ),
-            ):
-                rel = files.get(key)
-                if rel:
-                    Artifact.objects.create(
-                        project=project,
-                        dataset=ds,
-                        kind=kind,
-                        relpath=self._norm(rel),
-                    )
-                    n_artifacts += 1
-            for lig in files.get("ligands", []) or []:
-                Artifact.objects.create(
-                    project=project,
-                    dataset=ds,
-                    kind=Artifact.Kind.LIGAND,
-                    relpath=self._norm(lig),
+        return ProjectSpec(
+            name=name,
+            source_root=str(root),
+            datasets=datasets,
+            artifacts=self._report_artifacts(root, data),
+            shells=self._shells(data),
+        )
+
+    def _build_events(self, evs, files) -> list:
+        emaps = files.get("event_map_data", {}) or files.get(
+            "event_data", {}
+        )
+        out = []
+        for ev in evs:
+            num = ev.get("event_num")
+            rel = emaps.get(str(num))
+            out.append(
+                EventSpec(
+                    event_num=num,
+                    site_num=ev.get("site_num"),
+                    metrics={
+                        "event_fraction": ev.get("event_fraction"),
+                        "bdc": ev.get("bdc"),
+                        "z_peak": ev.get("z_peak"),
+                        "z_mean": ev.get("z_mean"),
+                        "cluster_size": ev.get("cluster_size"),
+                        "map_resolution": ev.get("map_resolution"),
+                        "xyz_centroid": ev.get("xyz_centroid", []),
+                        "xyz_peak": ev.get("xyz_peak", []),
+                    },
+                    event_map_relpath=self._norm(rel) if rel else None,
                 )
-                n_artifacts += 1
+            )
+        return out
 
-        # Project-level report HTMLs (from output_files.html) — for the
-        # dashboard's embedded iframe panel.
-        n_reports = 0
+    def _dataset_artifacts(self, files) -> list:
+        out = []
+        for key, kind in (
+            ("structure", Artifact.Kind.STRUCTURE),
+            ("data", Artifact.Kind.DATA_MTZ),
+            ("output_data", Artifact.Kind.OUTPUT_MTZ),
+        ):
+            rel = files.get(key)
+            if rel:
+                out.append(ArtifactSpec(kind, self._norm(rel)))
+        for lig in files.get("ligands", []) or []:
+            out.append(ArtifactSpec(Artifact.Kind.LIGAND, self._norm(lig)))
+        return out
+
+    def _report_artifacts(self, root, data) -> list:
+        """Project-level report HTMLs — for the dashboard iframe panel."""
+        out = []
         html_map = data.get("output_files", {}).get("html", {}) or {}
         for rel in html_map.values():
             if not rel:
@@ -134,36 +159,23 @@ class Command(BaseCommand):
             norm = self._norm(rel)
             # Some report HTMLs (e.g. pandda_inspect.html) are only written
             # after inspection — don't catalogue ones absent on disk.
-            if not (root / norm).is_file():
-                continue
-            Artifact.objects.create(
-                project=project,
-                kind=Artifact.Kind.REPORT_HTML,
-                relpath=norm,
-            )
-            n_reports += 1
+            if (root / norm).is_file():
+                out.append(ArtifactSpec(Artifact.Kind.REPORT_HTML, norm))
+        return out
 
-        n_shells = 0
+    def _shells(self, data) -> list:
+        out = []
         for sh in data.get("shell_records", []):
-            Shell.objects.create(
-                project=project,
-                label=sh.get("label", ""),
-                resolution_high=sh.get("resolution_high"),
-                resolution_low=sh.get("resolution_low"),
-                map_resolution=self._scalar(sh.get("map_resolution")),
-                map_uncertainty=self._scalar(sh.get("map_uncertainty")),
-                n_train=len(sh.get("train", [])),
-                n_test=len(sh.get("test", [])),
-            )
-            n_shells += 1
-
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Ingested '{name}': {len(datasets)} datasets, {n_events} "
-                f"events, {n_artifacts} artifacts, {n_reports} reports, "
-                f"{n_shells} shells."
-            )
-        )
+            out.append({
+                "label": sh.get("label", ""),
+                "resolution_high": sh.get("resolution_high"),
+                "resolution_low": sh.get("resolution_low"),
+                "map_resolution": self._scalar(sh.get("map_resolution")),
+                "map_uncertainty": self._scalar(sh.get("map_uncertainty")),
+                "n_train": len(sh.get("train", [])),
+                "n_test": len(sh.get("test", [])),
+            })
+        return out
 
     # --- helpers ---
 

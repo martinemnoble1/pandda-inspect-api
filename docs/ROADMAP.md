@@ -38,12 +38,20 @@ Rule learned (from the 120 MB WASM purge): **do not vendor large data into git**
 Remaining: wire a documented fetch script + remove any private-data assumptions
 from the default data path.
 
-### 2. Ground-truth / artifact-storage model — ✅ DESIGNED (see DESIGN doc)
+### 2. Ground-truth / artifact-storage model — ◧ SCHEMA + RECONCILE DONE
 The prototype wrote built models to disk + updated Redux but never updated
-`results.json` → drift. **Design agreed and written up in
-[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md)** — that doc is now
-the design of record for #2, the `JobRunner` seam (#4-adjacent), and the two
-deployment bindings. Decisions locked:
+`results.json` → drift. **Design in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md)** (design of record
+for #2, the `JobRunner` seam, and the two deployment bindings). **Implemented
+so far (branch `artifact-lineage-jobs`):** DESIGN §4 items 1–2 —
+- the schema (migration 0004): `Artifact.origin/parent/produced_by/created_at`,
+  `Event`/`Dataset.current_model` + `inputs_changed`, and the `Job` model;
+- the re-ingest reconciliation in `inspect_api/reconcile.py`, with both ingest
+  readers refactored to parse-only (→ `ProjectSpec`) and delegate persistence;
+  verified by `inspect_api/tests/test_reconcile.py` (5 tests) + real-data
+  re-ingest (decision + built-model preservation confirmed on clean BAZ2B).
+**Still to build:** the artifact-*producing* paths that USE these fields
+(#4 ligand-build, #4b job runner). Decisions locked:
 - **DB = ground truth**; lineage lives on `Artifact` itself (self-FK `parent` +
   `origin`/`produced_by`), not a separate version table. Pointers split by
   granularity: `Event.current_model` (built ligand) vs `Dataset.current_model`
