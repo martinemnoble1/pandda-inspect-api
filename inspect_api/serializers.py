@@ -29,7 +29,7 @@ class EventSerializer(serializers.ModelSerializer):
     )
     # Everything the inspect client needs to load this event in one place: the
     # event's own artifacts (event map) PLUS its dataset's shared artifacts
-    # (structure, ligand dicts). The structure is attached at dataset level (one
+    # (structure, ligand dicts). The structure attaches at dataset level (one
     # model per crystal, shared across its events), so surface it here too.
     artifacts = serializers.SerializerMethodField()
     # The coordinates the viewer should load: the event's own current_model
@@ -41,6 +41,9 @@ class EventSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(ArtifactSerializer(many=True))
     def get_artifacts(self, obj):
+        # Own artifacts include the event map AND the autobuilt ligand pose
+        # (LIGAND_POSE) — both event-scoped. The pose is an overlay/centre
+        # target, not a model (see per-event-vs-crystal-model design note).
         own = list(obj.artifacts.all())
         shared = obj.dataset.artifacts.filter(
             kind__in=[
@@ -69,6 +72,9 @@ class EventSerializer(serializers.ModelSerializer):
             "z_mean",
             "cluster_size",
             "map_resolution",
+            "build_score",
+            "rscc",
+            "optimal_contour",
             "xyz_centroid",
             "xyz_peak",
             # mutable inspection state — writable
@@ -92,6 +98,9 @@ class EventSerializer(serializers.ModelSerializer):
             "z_mean",
             "cluster_size",
             "map_resolution",
+            "build_score",
+            "rscc",
+            "optimal_contour",
             "xyz_centroid",
             "xyz_peak",
             "inspected_at",

@@ -158,10 +158,15 @@ class Command(BaseCommand):
         )
 
     def _build_events(self, root, dtag, rows) -> list:
+        # Per-event autobuild info (chosen ligand pose + build metrics) lives in
+        # processed_datasets/<dtag>/events.yaml, keyed by the same 1-based index
+        # as the CSV's event_idx. Absent for ~32/200 BAZ2B datasets — tolerated.
+        builds = self._read_event_builds(root, dtag)
         events = []
         for r in rows:
             event_idx = _i(r.get("event_idx"))
             xyz = [_f(r.get("x")), _f(r.get("y")), _f(r.get("z"))]
+            build = builds.get(event_idx, {})
             events.append(
                 EventSpec(
                     event_num=event_idx,
@@ -177,13 +182,64 @@ class Command(BaseCommand):
                         "xyz_centroid": [c for c in xyz if c is not None]
                         or [],
                         "xyz_peak": [],
+                        # Per-event autobuild quality (from events.yaml Build:).
+                        "build_score": build.get("build_score"),
+                        "rscc": build.get("rscc"),
+                        "optimal_contour": build.get("optimal_contour"),
                     },
                     event_map_relpath=self._find_event_map(
                         root, dtag, event_idx, r.get("1-BDC")
                     ),
+                    ligand_pose_relpath=build.get("pose_relpath"),
                 )
             )
         return events
+
+    @staticmethod
+    def _read_event_builds(root: Path, dtag: str) -> dict:
+        """Parse events.yaml → {event_idx: {pose_relpath, build_score, rscc,
+        optimal_contour}}.
+
+        Each top-level integer key is an event (1-based, matching CSV
+        event_idx); its ``Build:`` sub-block names the chosen autobuild ligand
+        pose and scores the fit. The ``Build Path`` is an ABSOLUTE path into
+        ``autobuild/`` — we relativise it to source_root so the download view's
+        traversal guard can serve it; a pose outside root (shouldn't happen) is
+        dropped. Missing file / no Build block / unparseable YAML ⇒ {} (the
+        per-dataset analysis simply has no autobuild, which is normal).
+        """
+        import yaml
+
+        ypath = root / PROCESSED / dtag / "events.yaml"
+        if not ypath.is_file():
+            return {}
+        try:
+            data = yaml.safe_load(ypath.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            return {}
+        out: dict = {}
+        for key, ev in (data.items() if isinstance(data, dict) else ()):
+            idx = _i(key)
+            if idx is None or not isinstance(ev, dict):
+                continue
+            build = ev.get("Build")
+            if not isinstance(build, dict):
+                continue
+            info = {
+                "build_score": _f(build.get("Build Score")),
+                "rscc": _f(build.get("RSCC")),
+                "optimal_contour": _f(build.get("Optimal Contour")),
+                "pose_relpath": None,
+            }
+            bpath = build.get("Build Path")
+            if bpath:
+                try:
+                    rel = Path(bpath).resolve().relative_to(root)
+                    info["pose_relpath"] = str(rel)
+                except (ValueError, OSError):
+                    info["pose_relpath"] = None  # outside root — drop
+            out[idx] = info
+        return out
 
     @staticmethod
     def _dataset_artifacts(processed_dir, dtag) -> list:

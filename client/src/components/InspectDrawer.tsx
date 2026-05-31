@@ -11,6 +11,8 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  IconButton,
+  MenuItem,
   Slider,
   Stack,
   TextField,
@@ -22,6 +24,9 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import BuildCircleIcon from "@mui/icons-material/BuildCircle";
+import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
+import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import store from "../store";
 import {
   newMap,
@@ -31,7 +36,24 @@ import {
   type MoorhenMapLike,
 } from "../moorhen-shim";
 import { api, type Artifact, type Dataset, type PanddaEvent } from "../api";
-import { groupEvents, summarise, type GroupAxis } from "../grouping";
+import {
+  adjacentEvent,
+  applyFilter,
+  bestQuality,
+  eventIsBuilt,
+  eventQuality,
+  FILTER_LABELS,
+  flattenEvents,
+  groupEvents,
+  isAutobuilt,
+  nextFilter,
+  SORT_LABELS,
+  sortGroups,
+  summarise,
+  type DatasetFilter,
+  type GroupAxis,
+  type SortKey,
+} from "../grouping";
 import { MolViewer } from "./MolViewer";
 
 interface Props {
@@ -62,8 +84,9 @@ export function InspectDrawer({
   const dispatch = useDispatch();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [axis, setAxis] = useState<GroupAxis>("dataset");
+  const [sort, setSort] = useState<SortKey>("dtag");
   const [search, setSearch] = useState("");
-  const [hitsOnly, setHitsOnly] = useState(true);
+  const [filter, setFilter] = useState<DatasetFilter>("active");
   const [expanded, setExpanded] = useState<string | false>(false);
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [selected, setSelected] = useState<PanddaEvent | null>(null);
@@ -213,7 +236,13 @@ export function InspectDrawer({
           // isolates the binding-event density (matches pandda.inspect practice
           // for this BAZ2B data). The right level varies by dataset/event, so
           // the user can retune via the slider.
-          const sigma = DEFAULT_EVENT_SIGMA;
+          // Prefer this event's autobuild-tuned contour (events.yaml "Optimal
+          // Contour", in σ) when present — the level the fitted ligand reads
+          // best at — else the generic BDC default. The slider still retunes.
+          const sigma =
+            ev.optimal_contour != null && ev.optimal_contour > 0
+              ? ev.optimal_contour
+              : DEFAULT_EVENT_SIGMA;
           const level =
             typeof map.mapRmsd === "number" && map.mapRmsd > 0
               ? sigma * map.mapRmsd
@@ -289,18 +318,37 @@ export function InspectDrawer({
   const liveLigand = liveDataset?.artifacts.find((a) => a.kind === "ligand");
 
   const groups = useMemo(() => {
-    const withEvents = hitsOnly
-      ? datasets.filter((d) => d.events.length > 0)
-      : datasets;
-    const grouped = groupEvents(withEvents, axis);
+    const visible = applyFilter(datasets, filter);
+    const grouped = groupEvents(visible, axis);
     const q = search.trim().toLowerCase();
-    if (!q) return grouped;
-    return grouped.filter(
-      (g) =>
-        g.title.toLowerCase().includes(q) ||
-        g.subtitle?.toLowerCase().includes(q)
-    );
-  }, [datasets, axis, hitsOnly, search]);
+    const filtered = !q
+      ? grouped
+      : grouped.filter(
+          (g) =>
+            g.title.toLowerCase().includes(q) ||
+            g.subtitle?.toLowerCase().includes(q)
+        );
+    return sortGroups(filtered, sort);
+  }, [datasets, axis, filter, search, sort]);
+
+  // The linear event sequence Prev/Next walks — exactly what's on screen, in
+  // display order, across dataset boundaries. Recomputed when the list changes
+  // (e.g. a dataset drops out after its last event is marked no_hit).
+  const eventOrder = useMemo(() => flattenEvents(groups), [groups]);
+  const navIndex = useMemo(
+    () =>
+      selected ? eventOrder.findIndex((e) => e.id === selected.id) : -1,
+    [eventOrder, selected]
+  );
+  const prevEvent = adjacentEvent(eventOrder, selected, -1);
+  const nextEvent = adjacentEvent(eventOrder, selected, +1);
+  const goAdjacent = useCallback(
+    (delta: number) => {
+      const target = adjacentEvent(eventOrder, selected, delta);
+      if (target) loadEvent(target);
+    },
+    [eventOrder, selected, loadEvent]
+  );
 
   return (
     <Box
@@ -340,22 +388,50 @@ export function InspectDrawer({
             Waiting for Moorhen to finish loading…
           </Typography>
         )}
-        <TextField
-          size="small"
-          fullWidth
-          placeholder={axis === "dataset" ? "Filter datasets…" : "Filter sites…"}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          sx={{ mt: 1 }}
-        />
-        <Box sx={{ mt: 0.5 }}>
-          <Chip
+        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+          <TextField
             size="small"
-            label={hitsOnly ? "With events only" : "All datasets"}
-            onClick={() => setHitsOnly((v) => !v)}
-            variant={hitsOnly ? "filled" : "outlined"}
-            color={hitsOnly ? "primary" : "default"}
+            fullWidth
+            placeholder={
+              axis === "dataset" ? "Filter datasets…" : "Filter sites…"
+            }
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
           />
+          <TextField
+            select
+            size="small"
+            label="Sort"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            sx={{ minWidth: 130, flexShrink: 0 }}
+          >
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+              <MenuItem key={k} value={k}>
+                {SORT_LABELS[k]}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Stack>
+        <Box sx={{ mt: 0.5 }}>
+          <Tooltip
+            title={
+              filter === "active"
+                ? "Showing datasets with events that aren't all marked No hit — click to widen"
+                : filter === "withEvents"
+                ? "Showing all datasets with events — click to show every dataset"
+                : "Showing every dataset — click to return to Active"
+            }
+            arrow
+          >
+            <Chip
+              size="small"
+              label={FILTER_LABELS[filter]}
+              onClick={() => setFilter((f) => nextFilter(f))}
+              variant={filter === "all" ? "outlined" : "filled"}
+              color={filter === "all" ? "default" : "primary"}
+            />
+          </Tooltip>
         </Box>
       </Box>
 
@@ -397,18 +473,36 @@ export function InspectDrawer({
                   >
                     {(() => {
                       // Triage signals computed from the group's events.
+                      const nEvents = g.events.length;
                       const nHits = g.events.filter(
                         (e) => e.decision === "hit"
                       ).length;
-                      const topFrac = g.events.reduce<number | null>(
-                        (m, e) =>
-                          e.event_fraction != null
-                            ? Math.max(m ?? 0, e.event_fraction)
-                            : m,
-                        null
-                      );
+                      const built = isAutobuilt(g.events);
+                      const topQ = bestQuality(g.events);
                       return (
                         <>
+                          <Tooltip title="Number of PanDDA events" arrow>
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`${nEvents} event${
+                                nEvents === 1 ? "" : "s"
+                              }`}
+                            />
+                          </Tooltip>
+                          {built && (
+                            <Tooltip
+                              title="A ligand model was autobuilt for this dataset"
+                              arrow
+                            >
+                              <Chip
+                                size="small"
+                                color="info"
+                                icon={<BuildCircleIcon />}
+                                label="built"
+                              />
+                            </Tooltip>
+                          )}
                           {nHits > 0 && (
                             <Chip
                               size="small"
@@ -416,16 +510,16 @@ export function InspectDrawer({
                               label={`${nHits} hit${nHits === 1 ? "" : "s"}`}
                             />
                           )}
-                          {topFrac != null && (
+                          {topQ != null && (
                             <Tooltip
-                              title="Highest event fraction in this dataset — a quick measure of the strongest event"
+                              title="Best bound-state occupancy in this dataset (1 − BDC) — a quick measure of the strongest hit"
                               arrow
                             >
                               <Chip
                                 size="small"
                                 variant="outlined"
-                                color={topFrac >= 0.4 ? "primary" : "default"}
-                                label={`top ${Math.round(topFrac * 100)}%`}
+                                color={topQ >= 0.4 ? "primary" : "default"}
+                                label={`Q ${Math.round(topQ * 100)}%`}
                               />
                             </Tooltip>
                           )}
@@ -465,19 +559,23 @@ export function InspectDrawer({
                   Click an event to view it in 3D · label is{" "}
                   {axis === "site"
                     ? "crystal : event"
-                    : "event · event-fraction"}
+                    : "event · quality (1 − BDC)"}
                 </Typography>
                 <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                   {g.events.map((ev) => {
                     const isLive = selected?.id === ev.id;
+                    const q = eventQuality(ev);
+                    const built = eventIsBuilt(ev);
                     const occ =
                       ev.event_fraction != null
                         ? `${Math.round(ev.event_fraction * 100)}%`
                         : "—";
+                    const qStr =
+                      q != null ? `${Math.round(q * 100)}%` : "—";
                     const label =
                       axis === "site"
                         ? `${ev.dtag}:${ev.event_num}`
-                        : `Event ${ev.event_num} · ${occ}`;
+                        : `Event ${ev.event_num} · ${qStr}`;
                     const tip = (
                       <Box sx={{ fontSize: 12, lineHeight: 1.5 }}>
                         <div>
@@ -485,11 +583,24 @@ export function InspectDrawer({
                             {ev.dtag} · event {ev.event_num}
                           </strong>
                         </div>
+                        <div>Quality (1 − BDC): {qStr}</div>
                         <div>Event fraction: {occ}</div>
                         <div>Z-peak: {ev.z_peak?.toFixed(1) ?? "—"}</div>
                         <div>BDC: {ev.bdc ?? "—"}</div>
                         <div>Cluster size: {ev.cluster_size ?? "—"}</div>
                         <div>Site: {ev.site_num ?? "—"}</div>
+                        <div
+                          style={{
+                            marginTop: 4,
+                            color: built ? "#4fc3f7" : undefined,
+                          }}
+                        >
+                          {built
+                            ? `Autobuilt ligand · RSCC ${
+                                ev.rscc?.toFixed(2) ?? "—"
+                              }`
+                            : "No autobuilt ligand"}
+                        </div>
                         <div style={{ marginTop: 4, opacity: 0.8 }}>
                           {cootInitialized
                             ? "Click to load structure + event map"
@@ -514,6 +625,11 @@ export function InspectDrawer({
                                 <CircularProgress size={14} />
                               ) : ev.decision === "hit" ? (
                                 <CheckCircleIcon />
+                              ) : built ? (
+                                // An autobuilt ligand backs this event — flag it
+                                // with the build icon so it reads differently
+                                // from a bare candidate event at a glance.
+                                <BuildCircleIcon />
                               ) : (
                                 <ViewInArIcon />
                               )
@@ -523,6 +639,17 @@ export function InspectDrawer({
                               fontWeight: isLive ? 700 : 500,
                               transition: "transform 80ms ease",
                               "&:hover": { transform: "translateY(-1px)" },
+                              // Built events get a solid accent edge + tint so
+                              // they stand out among unbuilt candidates without
+                              // stealing the decision colour (hit/no-hit) or the
+                              // live "viewing" highlight.
+                              ...(built && !isLive
+                                ? {
+                                    borderColor: "info.main",
+                                    borderWidth: 1.5,
+                                    bgcolor: "rgba(79,195,247,0.08)",
+                                  }
+                                : {}),
                             }}
                           />
                         </span>
@@ -550,9 +677,44 @@ export function InspectDrawer({
           </Typography>
         ) : (
           <Stack spacing={1}>
-            <Typography variant="subtitle2">
-              {selected.dtag} · event {selected.event_num}
-            </Typography>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+            >
+              <Typography variant="subtitle2">
+                {selected.dtag} · event {selected.event_num}
+              </Typography>
+              <Stack direction="row" alignItems="center" spacing={0.5}>
+                {navIndex >= 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    {navIndex + 1}/{eventOrder.length}
+                  </Typography>
+                )}
+                <Tooltip title="Previous event" arrow>
+                  <span>
+                    <IconButton
+                      size="small"
+                      disabled={!prevEvent || loadingId != null}
+                      onClick={() => goAdjacent(-1)}
+                    >
+                      <NavigateBeforeIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Next event" arrow>
+                  <span>
+                    <IconButton
+                      size="small"
+                      disabled={!nextEvent || loadingId != null}
+                      onClick={() => goAdjacent(+1)}
+                    >
+                      <NavigateNextIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+            </Stack>
             <Box
               sx={{
                 display: "grid",
@@ -561,6 +723,12 @@ export function InspectDrawer({
                 fontSize: 13,
               }}
             >
+              <span>Quality (1 − BDC)</span>
+              <strong>
+                {eventQuality(selected) != null
+                  ? `${Math.round(eventQuality(selected)! * 100)}%`
+                  : "—"}
+              </strong>
               <span>BDC</span>
               <strong>{selected.bdc ?? "—"}</strong>
               <span>Z-peak</span>

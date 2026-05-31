@@ -40,6 +40,22 @@ PanDDA2 ingest facts that bit us (all real, from a BAZ2B run):
 - An event may have **multiple** event-map files (one per BDC variant); the CSV
   `1-BDC` token picks the canonical one (`...event_N_1-BDC_<token>_map...`).
 - `-pandda-input.pdb/.mtz` are **symlinks** into a sibling `data/` dir.
+- **Per-event autobuild lives in `events.yaml`**, keyed by 1-based index ==
+  CSV `event_idx`. Each event's `Build:` block names the chosen ligand pose
+  (`Build Path`, an **absolute** path into `autobuild/N_M_ligand_0.pdb` —
+  relativise to `source_root` via `Path(p).resolve().relative_to(root)`) plus
+  `Build Score` / `RSCC` / `Optimal Contour`. We ingest the pose as an
+  event-scoped **`LIGAND_POSE`** artifact (NOT a model — it's ligand-only
+  coords; the model of record is the per-crystal `Dataset.current_model`) and
+  lift the three scores onto `Event.{build_score,rscc,optimal_contour}`. The
+  frontend seeds the contour slider from `optimal_contour` and badges built
+  event-chips.
+  - **GOTCHA (cost real time):** `_reconcile_events` creates the pose, but
+    `_replace_imported_dataset_artifacts` runs *after* and deletes every
+    imported dataset artifact NOT in its `.exclude(kind__in=...)` list — a new
+    event-scoped imported kind MUST be added there or it's silently nuked
+    (poses read 309-created-then-0-in-DB). Also: stale `inspect_api/__pycache__`
+    can mask `reconcile.py` edits; clear it if counts look wrong.
 
 Re-running an ingest **clobbers** decision state (replace, not reconcile). The
 reconciliation policy for re-ingest / PanDDA-rerun is an open design question.
