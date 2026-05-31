@@ -42,6 +42,22 @@ def _resolve_path(artifact: Artifact) -> Path:
     return (root / artifact.relpath).resolve()
 
 
+def _cif_path_for_job(cif: Artifact, workdir: Path) -> str:
+    """An on-disk path to the ligand CIF the tool can read.
+
+    Ligand dicts are usually EMBEDDED in the DB (``contents``) because they
+    live in the original data/ tree outside source_root — so there is no
+    servable on-disk path. Materialise the bytes into the job workdir; fall
+    back to the resolved relpath for any (legacy) on-disk dict.
+    """
+    if cif.contents:
+        workdir.mkdir(parents=True, exist_ok=True)
+        out = workdir / "ligand.cif"
+        out.write_text(cif.contents, encoding="utf-8")
+        return str(out)
+    return str(_resolve_path(cif))
+
+
 def _job_root(dataset: Dataset) -> Path:
     """Base dir under which this dataset's jobs write.
 
@@ -87,21 +103,11 @@ def submit_refinement(dataset: Dataset, params: dict | None = None) -> Job:
         kind=Artifact.Kind.LIGAND
     ).order_by("id").first()
 
-    spec = JobSpec(
-        tool=settings.REFINE_TOOL,
-        inputs={
-            "pdb": str(_resolve_path(pdb)),
-            "mtz": str(_resolve_path(mtz)),
-            "cif": str(_resolve_path(cif)) if cif else "",
-        },
-        params=params or {},
-    )
-
     # Create the Job first so we have an id for the workdir, then submit.
     job = Job.objects.create(
-        tool=spec.tool,
+        tool=settings.REFINE_TOOL,
         dataset=dataset,
-        spec={"inputs": spec.inputs, "params": spec.params},
+        spec={},
         status=Job.Status.QUEUED,
     )
     # Workdir under the project's OWN root so the refined artifact's relpath
@@ -109,8 +115,25 @@ def submit_refinement(dataset: Dataset, params: dict | None = None) -> Job:
     # every other artifact — including for in-place-ingested projects whose
     # root is outside PANDDA_JOBS_ROOT (DESIGN §5.2).
     workdir = _job_root(dataset) / f"jobs/{job.id}"
-    # Record the input artifact id so landing can set lineage parent.
-    job.spec["input_pdb_artifact_id"] = pdb.id
+
+    spec = JobSpec(
+        tool=settings.REFINE_TOOL,
+        inputs={
+            "pdb": str(_resolve_path(pdb)),
+            "mtz": str(_resolve_path(mtz)),
+            # The ligand dict may be EMBEDDED in the DB (it lives outside
+            # source_root, so it has no on-disk path here) — materialise it
+            # into the workdir for the tool. Fall back to the on-disk relpath.
+            "cif": _cif_path_for_job(cif, workdir) if cif else "",
+        },
+        params=params or {},
+    )
+    job.spec = {
+        "inputs": spec.inputs,
+        "params": spec.params,
+        # Record the input artifact id so landing can set lineage parent.
+        "input_pdb_artifact_id": pdb.id,
+    }
     handle = runner.submit(spec, workdir)
     job.runner_handle = handle
     job.status = Job.Status.RUNNING

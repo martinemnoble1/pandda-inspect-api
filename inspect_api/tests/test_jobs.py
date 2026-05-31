@@ -14,7 +14,7 @@ from pathlib import Path
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from inspect_api.models import Artifact, Dataset, Project
+from inspect_api.models import Artifact, Dataset, Job, Project
 
 
 def _make_stand_in_tool(tmp: Path, succeed=True) -> Path:
@@ -160,3 +160,26 @@ class RefinementLoopTests(TestCase):
             )
         self.assertEqual(resp.status_code, 400)
         self.assertIn("not found", resp.json()["detail"].lower())
+
+    def test_embedded_ligand_cif_is_materialised_for_the_tool(self):
+        # Ligand dicts are embedded in the DB (they live outside source_root),
+        # so submit must WRITE the bytes into the job workdir and pass THAT
+        # path to the tool — not a non-existent relpath. Regression: a real
+        # servalcat run failed in ~7s on a missing ligand.cif before this.
+        Artifact.objects.create(
+            dataset=self.dataset, kind=Artifact.Kind.LIGAND,
+            relpath="processed/d1/ligand.cif", origin=Artifact.Origin.IMPORTED,
+            contents="data_comp_LIG\n# (restraints)\n",
+        )
+        with self._settings(succeed=True):
+            resp = self.client.post(
+                reverse("job-submit"),
+                {"dataset": self.dataset.id}, content_type="application/json",
+            )
+            job_id = resp.json()["id"]
+        job = Job.objects.get(pk=job_id)
+        cif_path = Path(job.spec["inputs"]["cif"])
+        # Path is inside the job workdir, and the bytes were written there.
+        self.assertIn(f"jobs/{job_id}", str(cif_path))
+        self.assertTrue(cif_path.is_file())
+        self.assertIn("data_comp_LIG", cif_path.read_text(encoding="utf-8"))

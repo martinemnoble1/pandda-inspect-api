@@ -29,6 +29,26 @@ export interface Artifact {
   event: number | null;
   download_url: string;
 }
+export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export interface Job {
+  id: number;
+  tool: string;
+  dataset: number | null;
+  event: number | null;
+  status: JobStatus;
+  output_artifact: number | null;
+  output_artifact_url: string | null;
+  log_relpath: string;
+  created_at: string;
+  finished_at: string | null;
+}
+// Result of the refinement-environment probe (CCP4 wired?) — gates the button.
+export interface RefineAvailability {
+  available: boolean;
+  tool: string;
+  resolved: string;
+  reason: string;
+}
 export interface PanddaEvent {
   id: number;
   dataset: number;
@@ -116,6 +136,26 @@ export const api = {
     if (!r.ok) throw new Error(body.detail || `${r.status} import failed`);
     return body;
   },
+  // --- jobs (refinement dispatch/tracking) ---
+  // Is the refinement environment wired (CCP4 probe)? Gates the UI action.
+  refineAvailable: () =>
+    get<RefineAvailability>("/jobs/refine_available/"),
+  // Dispatch a refinement of a dataset's current-best model. Returns the
+  // queued/running Job; poll getJob until it leaves "running".
+  async submitRefine(datasetId: number, params?: Record<string, unknown>) {
+    const r = await fetch(`${BASE}/jobs/submit/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset: datasetId, params }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `${r.status} submit failed`);
+    return body as Job;
+  },
+  // Poll a job. GET also runs the server-side land-on-success step, so once
+  // this returns status "succeeded" the dataset's current_model is repointed.
+  getJob: (id: number) => get<Job>(`/jobs/${id}/`),
+
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
   artifactUrl: (a: Artifact) => a.download_url,
 };

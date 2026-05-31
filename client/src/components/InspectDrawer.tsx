@@ -8,6 +8,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
+  Button,
   Chip,
   CircularProgress,
   Divider,
@@ -35,7 +36,14 @@ import {
   setContourLevel,
   type MoorhenMapLike,
 } from "../moorhen-shim";
-import { api, type Artifact, type Dataset, type PanddaEvent } from "../api";
+import {
+  api,
+  type Artifact,
+  type Dataset,
+  type Job,
+  type PanddaEvent,
+  type RefineAvailability,
+} from "../api";
 import {
   adjacentEvent,
   applyFilter,
@@ -91,6 +99,12 @@ export function InspectDrawer({
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [selected, setSelected] = useState<PanddaEvent | null>(null);
   const [contour, setContour] = useState(DEFAULT_EVENT_SIGMA);
+  // Refinement is CRYSTAL-scoped (acts on the dataset's current_model vs its
+  // MTZ; legacy pandda.inspect + DESIGN §1.2). refineAvail gates the action on
+  // the CCP4 probe; refineJob tracks the live job for status display.
+  const [refineAvail, setRefineAvail] =
+    useState<RefineAvailability | null>(null);
+  const [refineJob, setRefineJob] = useState<Job | null>(null);
   const loadedDtag = useRef<string | null>(null);
   const eventMapRef = useRef<MoorhenMapLike | null>(null);
 
@@ -101,6 +115,12 @@ export function InspectDrawer({
       .then((d) => setDatasets(d.results))
       .catch(() => setDatasets([]));
   }, [projectName]);
+
+  // Probe once whether the refinement environment is wired (CCP4). Gates the
+  // Refine action; null while unknown, then the probe result.
+  useEffect(() => {
+    api.refineAvailable().then(setRefineAvail).catch(() => setRefineAvail(null));
+  }, []);
 
   // Delete every map currently in the store (state.maps is an array in 0.23).
   const clearMaps = useCallback(async () => {
@@ -304,6 +324,46 @@ export function InspectDrawer({
       setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
     },
     []
+  );
+
+  // Refine the WHOLE CRYSTAL: dispatch a servalcat Job on the dataset's
+  // current_model vs its MTZ, poll to completion, then reload so the refined
+  // model (the new current_model) is what's shown. Crystal-scoped by design —
+  // events contribute ligands to this one model; you don't refine an event.
+  const refineCrystal = useCallback(
+    async (ev: PanddaEvent) => {
+      if (refineJob && refineJob.status === "running") return;
+      try {
+        let job = await api.submitRefine(ev.dataset);
+        setRefineJob(job);
+        // Poll until it leaves running (getJob also lands the artifact server
+        // side on first success). Cap the wait so a hung job doesn't poll
+        // forever.
+        for (let i = 0; i < 600 && job.status === "running"; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          job = await api.getJob(job.id);
+          setRefineJob(job);
+        }
+        if (job.status === "succeeded") {
+          // Re-fetch datasets so the dataset's current_model now points at the
+          // refined model, then force a model reload of the live event.
+          const fresh = await api.listDatasets(projectName);
+          setDatasets(fresh.results);
+          const reloaded = fresh.results
+            .flatMap((d) => d.events)
+            .find((e) => e.id === ev.id);
+          if (reloaded) {
+            loadedDtag.current = null; // force loadEvent to re-pull coords
+            await loadEvent(reloaded);
+          }
+        }
+      } catch {
+        setRefineJob((j) =>
+          j ? { ...j, status: "failed" } : j
+        );
+      }
+    },
+    [refineJob, projectName, loadEvent]
   );
 
   // The dataset whose event is currently live in Moorhen — its ligand sketch
@@ -787,6 +847,57 @@ export function InspectDrawer({
               </ToggleButton>
               <ToggleButton value="ambiguous">Ambiguous</ToggleButton>
             </ToggleButtonGroup>
+
+            {/* Refinement is CRYSTAL-scoped: it acts on the whole-crystal
+                current_model vs the dataset's data, not on this single event.
+                Labelled with the dtag to make that explicit. */}
+            <Divider sx={{ my: 0.5 }} />
+            <Tooltip
+              arrow
+              title={
+                refineAvail && !refineAvail.available
+                  ? refineAvail.reason ||
+                    "Refinement environment not available"
+                  : "Refine the whole-crystal model against this dataset's " +
+                    "data (servalcat). The refined model becomes current."
+              }
+            >
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  fullWidth
+                  disabled={
+                    !refineAvail?.available ||
+                    refineJob?.status === "running"
+                  }
+                  onClick={() => refineCrystal(selected)}
+                  startIcon={
+                    refineJob?.status === "running" ? (
+                      <CircularProgress size={14} />
+                    ) : undefined
+                  }
+                >
+                  {refineJob?.status === "running"
+                    ? "Refining…"
+                    : `Refine crystal ${selected.dtag}`}
+                </Button>
+              </span>
+            </Tooltip>
+            {refineJob && refineJob.status !== "running" && (
+              <Typography
+                variant="caption"
+                color={
+                  refineJob.status === "succeeded"
+                    ? "success.main"
+                    : "error.main"
+                }
+              >
+                {refineJob.status === "succeeded"
+                  ? "Refinement complete — model updated."
+                  : "Refinement failed (see server log)."}
+              </Typography>
+            )}
           </Stack>
         )}
       </Box>
