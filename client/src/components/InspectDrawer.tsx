@@ -342,6 +342,22 @@ export function InspectDrawer({
   );
   const prevEvent = adjacentEvent(eventOrder, selected, -1);
   const nextEvent = adjacentEvent(eventOrder, selected, +1);
+
+  // Keep the accordion in step with the live event: open the group the
+  // selected event belongs to and collapse any other (single-open). This makes
+  // the list reflect "where am I" when prev/next crosses a dataset boundary —
+  // and when clicking a chip in a collapsed group. Grouping by dataset keys on
+  // dtag; by site keys on "site-N" / "unassigned" (see grouping.ts).
+  useEffect(() => {
+    if (!selected) return;
+    const key =
+      axis === "dataset"
+        ? selected.dtag
+        : selected.site_num == null
+        ? "unassigned"
+        : `site-${selected.site_num}`;
+    setExpanded((cur) => (cur === key ? cur : key));
+  }, [selected, axis]);
   const goAdjacent = useCallback(
     (delta: number) => {
       const target = adjacentEvent(eventOrder, selected, delta);
