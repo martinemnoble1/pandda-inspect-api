@@ -22,6 +22,11 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
 class EventSerializer(serializers.ModelSerializer):
     dtag = serializers.CharField(source="dataset.dtag", read_only=True)
+    # Ligand-spec provenance (cif|pdb|smiles|none) from the dataset, so the
+    # inspect view can honestly badge "no restraint dictionary" when != cif.
+    ligand_source = serializers.CharField(
+        source="dataset.ligand_source", read_only=True
+    )
     # Everything the inspect client needs to load this event in one place: the
     # event's own artifacts (event map) PLUS its dataset's shared artifacts
     # (structure, ligand dicts). The structure is attached at dataset level (one
@@ -74,6 +79,7 @@ class EventSerializer(serializers.ModelSerializer):
             "inspected_at",
             "artifacts",
             "current_model",
+            "ligand_source",
         ]
         # Analysis output is read-only; only the decision fields are writable.
         read_only_fields = [
@@ -109,6 +115,7 @@ class DatasetSerializer(serializers.ModelSerializer):
             "r_free",
             "r_work",
             "map_uncertainty",
+            "ligand_source",
             "events",
             "artifacts",
         ]

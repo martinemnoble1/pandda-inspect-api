@@ -29,11 +29,28 @@ class Project(models.Model):
 class Dataset(models.Model):
     """One crystal / dtag within a project, with its analysis metrics."""
 
+    class LigandSource(models.TextChoices):
+        # Best-available ligand-spec slot found at ingest, mirroring PanDDA2's
+        # own LigandFiles model (cif/pdb/smiles, priority cif>pdb>smiles;
+        # verified vs the pandda2 source). Only ``cif`` yields a dictionary
+        # usable for refinement/display; the rest record an honest gap (see
+        # docs/DESIGN-artifacts-and-jobs.md §6.2). Surfaced so the UI can badge
+        # "no restraint dictionary" rather than silently degrade.
+        CIF = "cif", "Restraint dictionary (CIF)"
+        PDB = "pdb", "Coordinates only (PDB), no dictionary"
+        SMILES = "smiles", "SMILES only, no dictionary"
+        NONE = "none", "No ligand specification"
+
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="datasets"
     )
     dtag = models.CharField(max_length=64)
     subtitle = models.CharField(max_length=255, blank=True, default="")
+    ligand_source = models.CharField(
+        max_length=8,
+        choices=LigandSource.choices,
+        default=LigandSource.NONE,
+    )
 
     analysed_resolution = models.FloatField(null=True, blank=True)
     high_resolution = models.FloatField(null=True, blank=True)

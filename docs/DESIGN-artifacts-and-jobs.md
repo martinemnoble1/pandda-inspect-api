@@ -568,3 +568,59 @@ we assign occupancies before refining), recorded here so it is not lost:
 > groups, BDC-derived bound fraction, altloc-clash avoidance) or refine the
 > bound state alone? Decide when building the ligand-placement step; it defines
 > what `Event.current_model` *is*.
+
+## 6. Ligand dictionaries: refinement vs depiction, and the SMILES gap
+
+Findings from surfacing ligands in the viewer (2026-05-31), which separate two
+concerns that look like one:
+
+### 6.1 The ingested dicts are refinement-complete; kekulization is cosmetic
+
+BAZ2B's `data/<dtag>/ligand.cif` (embedded in the DB, §5.7-adjacent) is a full
+Grade/AceDRG-style restraint dictionary: `_chem_comp_atom` with real CCP4
+`type_energy` (CR16/CR56/CR5/NRD5/NR5/CT/…), plus bond/angle/torsion **targets +
+esds** and **planarity** restraints. **Confirmed (by the maintainer) that Moorhen
+refines with these as-is**, even though their bonds are typed `aromatic` rather
+than kekulized.
+
+So the bond-order question is **display-only**:
+
+* **Refinement** gets ring geometry from bond-distance targets + planarity
+  restraints — it does NOT need kekulized double bonds. Ready today; step 3
+  consumes these dicts unchanged.
+* **Depiction** — Moorhen draws double bonds only for `type=DOUBLE` (its own demo
+  dicts are kekulized: `type=DOUBLE/SINGLE` + `aromatic=y` as a *flag*). Our
+  `type=aromatic` dicts therefore render all-single. **Parked as cosmetic**:
+  kekulization edge cases (tautomers, charged/fused aromatics, and crucially
+  atom-naming consistency) are tricky and low-value. The
+  re-perceive-after-`addDict` fix (dirty+redraw) is kept regardless — it's
+  correct, and it's where any future depiction work would hook in.
+
+### 6.2 The real user-help problem is SMILES-fed projects (provenance, not cosmetics)
+
+Whether a usable dict even exists "depends on the route into the data that went
+into PanDDA". Confirmed against the PanDDA2 source (`fs/pandda_input.py`
+`LigandFiles`, `fs/pandda_output.py`): ligand input is a **triple of optional,
+regex-discovered, validity-checked slots** — `ligand_cif` / `ligand_pdb` /
+`ligand_smiles` — resolved with **priority cif → pdb → smiles**. So
+`Dataset.ligand_source` takes the best-available slot:
+
+* **cif** — a real restraint CIF was provided (BAZ2B: all 201). Refines + serves.
+* **pdb** — ligand *coordinates* only, no restraint dictionary.
+* **smiles** — SMILES only. PanDDA2 *generates* a CIF from it via grade/grade2 at
+  run time (`GRADE_COMMAND`) / an RDKit path (`autobuild/inbuilt.py`
+  `Chem.MolFromSmiles`), but that generated dict may not be retained in output.
+* **none** — no ligand spec at all.
+
+For `pdb`/`smiles`/`none` there is NO restraint dict in the data, and recovering
+even a minimal display dict **with atom naming consistent with the placed
+coordinates** is hard. The likely right source is PanDDA2's OWN RDKit/grade
+ligand workflow (if it placed a ligand, a naming-consistent mol/dict probably
+exists in its output) — recover from there, don't regenerate independently
+(naming would drift from the coords). **Investigation deferred.**
+
+**Decision (now): detect + record + surface this provenance, don't fix it.**
+A `Dataset.ligand_source` field (cif|pdb|smiles|none) classified at ingest,
+surfaced in the API so the UI can honestly badge "no restraint dictionary"
+instead of silently degrading. Dict recovery/generation for the non-cif cases is
+future work (the RDKit-workflow-recovery problem, not orthogonal regeneration).

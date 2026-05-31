@@ -73,6 +73,10 @@ class DatasetSpec:
     # dataset's current_model so the viewer shows the built ligand. None ⇒ no
     # analysis model (33/201 in BAZ2B); current_model stays unset.
     current_model_relpath: str | None = None
+    # Best-available ligand-spec slot (cif|pdb|smiles|none) — recorded so the
+    # UI can be honest about whether a restraint dictionary exists. Defaults to
+    # "none"; the reader classifies it. See docs DESIGN §6.2.
+    ligand_source: str = "none"
 
 
 @dataclass
@@ -164,9 +168,10 @@ def _upsert_dataset(project, ds_spec):
         project=project, dtag=ds_spec.dtag
     )
     inputs_before = _imported_input_relpaths(ds)
-    # Machine metrics + subtitle move in place; human state lives on Events,
-    # not here, so there is nothing on Dataset to protect.
+    # Machine metrics + subtitle + ligand-source provenance move in place;
+    # human state lives on Events, not here, so nothing on Dataset to protect.
     ds.subtitle = ds_spec.subtitle
+    ds.ligand_source = ds_spec.ligand_source
     for k, v in ds_spec.metrics.items():
         setattr(ds, k, v)
     ds.save()

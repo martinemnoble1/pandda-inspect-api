@@ -147,6 +147,9 @@ class Command(BaseCommand):
                 current_model_relpath=self._analysis_model_relpath(
                     processed_dir, dtag
                 ),
+                ligand_source=self._classify_ligand_source(
+                    processed_dir / dtag, dtag
+                ),
             )
             datasets.append(ds_spec)
 
@@ -233,24 +236,33 @@ class Command(BaseCommand):
                        / f"{dtag}-pandda-model.pdb").exists() else None
 
     @staticmethod
+    def _data_dir(ddir: Path, dtag: str) -> Path | None:
+        """The original data/<dtag>/ dir, via the -pandda-input.pdb symlink.
+
+        PanDDA2 symlinks its inputs from data/<dtag>/ into the processed dir, so
+        the symlink target's parent IS that dataset's data dir — where the
+        ligand spec (cif/pdb/smiles) lives. None if the symlink can't resolve.
+        """
+        input_pdb = ddir / f"{dtag}-pandda-input.pdb"
+        try:
+            target = input_pdb.resolve()
+            return target.parent if target.exists() else None
+        except OSError:
+            return None
+
+    @staticmethod
     def _find_ligand_cif(ddir: Path, dtag: str) -> str | None:
         """Return the ligand restraint CIF *contents*, or None.
 
-        Looks first in the original data tree (data/<dtag>/ligand.cif), located
-        by resolving the -pandda-input.pdb symlink to its data/<dtag>/ dir; then
+        Looks first in the original data tree (data/<dtag>/ligand.cif), then
         falls back to any ligand_files/*.cif inside the processed dir. Returns
-        the file text (embedded in the DB). Tolerates SMILES-only / missing
+        the file text (embedded in the DB). Tolerates SMILES/pdb-only / missing
         dicts by returning None — those datasets are flagged by the caller.
         """
         candidates = []
-        # 1. data/<dtag>/ligand.cif via the resolved input-pdb symlink.
-        input_pdb = ddir / f"{dtag}-pandda-input.pdb"
-        try:
-            data_dir = input_pdb.resolve().parent
+        data_dir = Command._data_dir(ddir, dtag)
+        if data_dir is not None:
             candidates.append(data_dir / "ligand.cif")
-        except OSError:
-            pass
-        # 2. Fallback: ligand_files/*.cif inside the processed dataset dir.
         lig_dir = ddir / "ligand_files"
         if lig_dir.is_dir():
             candidates.extend(sorted(lig_dir.glob("*.cif")))
@@ -261,6 +273,34 @@ class Command(BaseCommand):
             except OSError:
                 continue
         return None
+
+    @staticmethod
+    def _classify_ligand_source(ddir: Path, dtag: str) -> str:
+        """Best-available ligand-spec slot: cif | pdb | smiles | none.
+
+        Mirrors PanDDA2's LigandFiles model + priority (cif>pdb>smiles). Looks
+        in the original data/<dtag>/ dir and ligand_files/ fallback. This is
+        provenance, NOT a dict generator — only ``cif`` means a usable
+        dictionary exists (DESIGN §6.2).
+        """
+        data_dir = Command._data_dir(ddir, dtag)
+        lig_dir = ddir / "ligand_files"
+        search = [d for d in (data_dir, lig_dir) if d and d.is_dir()]
+
+        def has(*names_or_globs) -> bool:
+            for d in search:
+                for n in names_or_globs:
+                    if any(d.glob(n)):
+                        return True
+            return False
+
+        if has("ligand.cif", "*.cif"):
+            return "cif"
+        if has("ligand.pdb"):  # NB not *.pdb: avoid matching the input pdb
+            return "pdb"
+        if has("ligand.smiles", "*.smiles", "*.smi"):
+            return "smiles"
+        return "none"
 
     # --- helpers ---
 
