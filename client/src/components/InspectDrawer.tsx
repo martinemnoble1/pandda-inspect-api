@@ -28,6 +28,7 @@ import {
   newMolecule,
   recentre,
   setActiveMap,
+  setContourLevel,
   type MoorhenMapLike,
 } from "../moorhen-shim";
 import { api, type Artifact, type Dataset, type PanddaEvent } from "../api";
@@ -40,6 +41,12 @@ interface Props {
   commandCentre: RefObject<moorhen.CommandCentre | null>;
   cootInitialized: boolean;
 }
+
+// Default contour level (in σ) for PanDDA event maps. BDC correction inflates
+// the bound-state density, so ~2σ isolates the binding event where 1σ shows too
+// much bulk. The ideal level is dataset/event-dependent — this is just the
+// starting point; the slider lets the user retune.
+const DEFAULT_EVENT_SIGMA = 2.0;
 
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
@@ -61,7 +68,7 @@ export function InspectDrawer({
   const [expanded, setExpanded] = useState<string | false>(false);
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [selected, setSelected] = useState<PanddaEvent | null>(null);
-  const [contour, setContour] = useState(1.0);
+  const [contour, setContour] = useState(DEFAULT_EVENT_SIGMA);
   const loadedDtag = useRef<string | null>(null);
   const eventMapRef = useRef<MoorhenMapLike | null>(null);
 
@@ -120,25 +127,76 @@ export function InspectDrawer({
           await clearMaps();
         }
 
-        const emap = artifactOf(ev, "event_map");
-        if (emap) {
-          const map = newMap(commandCentre, store);
-          await map.loadToCootFromMtzURL(
-            api.artifactUrl(emap),
-            `${ev.dtag}-EVENT`,
-            { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false }
-          );
-          dispatch(addMap(map as any));
-          dispatch(setActiveMap(map));
-          eventMapRef.current = map;
-          setContour(map.contourLevel ?? 1.0);
-        }
-
+        // Recentre on the event. recentre() dispatches setOrigin (the Redux
+        // source of truth that MoorhenMap.drawMapContour reads, so the map
+        // re-contours at the new centre) and nudges the GL camera. Done BEFORE
+        // loading the map so the map's first contour lands on the event.
         if (ev.xyz_centroid?.length === 3) {
           recentre(
+            dispatch,
             glRef as { current: unknown },
             ev.xyz_centroid as [number, number, number]
           );
+        }
+
+        const emap = artifactOf(ev, "event_map");
+        if (emap) {
+          const map = newMap(commandCentre, store);
+          // PanDDA2 emits event maps as CCP4 real-space maps; PanDDA1 emitted
+          // them as MTZ reflection files (with FEVENT/PHEVENT columns). Branch
+          // on the artifact's extension so both ingests work — the import
+          // boundary changed the format, not the contract.
+          const isCcp4 = /\.(ccp4|map|mrc)$/i.test(emap.relpath);
+          if (isCcp4) {
+            await map.loadToCootFromMapURL(
+              api.artifactUrl(emap),
+              `${ev.dtag}-EVENT`,
+              false
+            );
+          } else {
+            await map.loadToCootFromMtzURL(
+              api.artifactUrl(emap),
+              `${ev.dtag}-EVENT`,
+              { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false }
+            );
+          }
+          // PanDDA event maps are real-space CCP4 maps read directly (not
+          // MTZ→FFT). Moorhen's direct-map load runs is_EM_map, and a PanDDA box
+          // can trip it → isOriginLocked=true → doCootContour IGNORES the GL
+          // origin and contours at the cell centre (MoorhenMap.doCootContour).
+          // That pins the density at a fixed spot regardless of setOrigin, which
+          // is exactly the "won't centre / won't track on pan" symptom. These
+          // are crystallographic event maps, not cryo-EM: unlock so the contour
+          // follows the origin like a normal X-ray map.
+          map.isEM = false;
+          map.isOriginLocked = false;
+          // Contour level: Coot's contour API works in ABSOLUTE map units, so a
+          // sigma level must be multiplied by the map RMSD (Moorhen's own
+          // default-contour logic does exactly this — MoorhenMapManager).
+          // Passing a bare 1.0 absolute (as before) gives an arbitrary level for
+          // any map whose RMSD isn't ~1, which is why event maps looked wrong.
+          //
+          // PanDDA event maps are BDC-corrected: the bound-state ligand density
+          // is restored toward full occupancy, so they are viewed like a normal
+          // 2Fo-Fc map (single positive contour) — NOT like an Fo-Fc difference
+          // map at ±3σ. Hence isDifference stays false. Default 2σ: BDC
+          // correction inflates contrast, so 1σ shows too much bulk; ~2σ
+          // isolates the binding-event density (matches pandda.inspect practice
+          // for this BAZ2B data). The right level varies by dataset/event, so
+          // the user can retune via the slider.
+          const sigma = DEFAULT_EVENT_SIGMA;
+          const level =
+            typeof map.mapRmsd === "number" && map.mapRmsd > 0
+              ? sigma * map.mapRmsd
+              : map.contourLevel ?? 1.0;
+          dispatch(addMap(map as any));
+          dispatch(setActiveMap(map));
+          // Set the level via Redux — MoorhenMapManager re-contours off the
+          // `contourLevels` slice, NOT off map.contourLevel (see shim note).
+          dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
+          eventMapRef.current = map;
+          // Surface the level in σ for the slider (which is labelled in σ).
+          setContour(sigma);
         }
         setSelected(ev);
       } finally {
@@ -148,15 +206,24 @@ export function InspectDrawer({
     [glRef, commandCentre, cootInitialized, dispatch, clearLoaded, clearMaps]
   );
 
-  const onContour = useCallback((_: Event, v: number | number[]) => {
-    const level = Array.isArray(v) ? v[0] : v;
-    setContour(level);
-    const map = eventMapRef.current;
-    if (map) {
-      map.contourLevel = level;
-      void map.drawMapContour();
-    }
-  }, []);
+  const onContour = useCallback(
+    (_: Event, v: number | number[]) => {
+      // Slider is in σ; Coot contours in ABSOLUTE units, so multiply by RMSD.
+      const sigma = Array.isArray(v) ? v[0] : v;
+      setContour(sigma);
+      const map = eventMapRef.current;
+      if (map) {
+        const level =
+          typeof map.mapRmsd === "number" && map.mapRmsd > 0
+            ? sigma * map.mapRmsd
+            : sigma;
+        // Dispatch — the MapManager redraws off the Redux contourLevels slice.
+        // Poking map.contourLevel + drawMapContour() does not re-render.
+        dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
+      }
+    },
+    [dispatch]
+  );
 
   const setDecision = useCallback(
     async (ev: PanddaEvent, decision: string) => {
@@ -201,7 +268,17 @@ export function InspectDrawer({
 
   return (
     <Box
-      sx={{ width: 380, height: "100%", display: "flex", flexDirection: "column" }}
+      sx={{
+        // Fill the host side-panel rather than a fixed 380px column (which left
+        // the right of the wider Moorhen panel empty). minWidth keeps it usable
+        // if the panel is ever dragged narrow.
+        width: "100%",
+        minWidth: 320,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        boxSizing: "border-box",
+      }}
     >
       {/* Controls */}
       <Box sx={{ p: 1, flexShrink: 0 }}>

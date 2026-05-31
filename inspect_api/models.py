@@ -82,6 +82,14 @@ class Event(models.Model):
     z_mean = models.FloatField(null=True, blank=True)
     cluster_size = models.IntegerField(null=True, blank=True)
     map_resolution = models.FloatField(null=True, blank=True)
+    # PanDDA2's own ranking output: hit_in_site_probability / Score. This is an
+    # *analysis-emitted* confidence, deliberately separate from the mutable
+    # human ``decision``/``confidence`` below — the machine's opinion vs the
+    # curator's. Null for PanDDA1 ingests, which don't emit it.
+    score = models.FloatField(null=True, blank=True)
+    # PanDDA's own boolean verdict (PanDDA2 ``interesting`` column). Again
+    # distinct from the human decision; advisory only.
+    interesting = models.BooleanField(null=True, blank=True)
     # Recentre target for the viewer.
     xyz_centroid = models.JSONField(default=list)
     xyz_peak = models.JSONField(default=list)
