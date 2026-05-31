@@ -95,41 +95,37 @@ python manage.py check
 ## B. Tester (full loop, incl. refinement)
 
 Everything in A, plus the ability to dispatch a refinement of the current-best
-model via `giant.quick_refine` and watch it become the new `current_model`.
+model and watch it become the new `current_model`. The runner drives **stock
+CCP4** refinement (`servalcat` by default, `refmac5` as a fallback) directly —
+**not** `giant.quick_refine`. Why: `giant.quick_refine` is only a thin wrapper
+around REFMAC, may be locally patched in a given install (non-reproducible), and
+the tool we actually want is plain CCP4. See DESIGN §5.8.
 
-### B.1 Why this needs extra setup
+> Note: an earlier plan assumed a PanDDA2 conda `giant.quick_refine`. Inspecting
+> a real install showed (a) it's just a REFMAC launcher and (b) CCP4 also ships
+> an older PanDDA1 `giant.refine` — a name-clash footgun. Driving `servalcat`
+> from stock CCP4 sidesteps both and needs **no conda env** for refinement.
 
-`giant.quick_refine` is **not** a bare-PATH binary. The one we want ships with
-**PanDDA2**, inside a **conda env**, and depends on **CCP4** being set up too.
+### B.1 What you need
 
-> ⚠️ **Footgun:** CCP4 *also* ships an *older* PanDDA1 `giant.refine`. If you
-> source CCP4 and run `which giant.refine` you may get the **wrong** tool. The
-> activation **order** below (CCP4 first, then the PanDDA2 conda env) is what
-> makes the PanDDA2 tool win. This is a correctness issue, not just convenience.
+Just **CCP4 set up** (for `servalcat`). The conda-env variables below are
+optional — only needed if you point `REFINE_TOOL` at a conda-only tool.
 
-### B.2 Activation recipe (order matters)
-
-```sh
-# 1. CCP4 first
-source /path/to/ccp4-9/bin/ccp4.setup-sh
-# 2. THEN the PanDDA2 conda env (so its tools take precedence over CCP4's)
-source /path/to/miniconda3/etc/profile.d/conda.sh
-conda activate pandda2
-# now: `giant.quick_refine` is the PanDDA2 one
-```
-
-You do **not** run this by hand for the app — you tell the backend *where* these
-scripts are via environment variables, and the job runner performs the
-activation in a wrapper before each refinement (DESIGN §5.6). Set in `.env`:
+### B.2 Wiring (env vars in `.env`)
 
 ```
-CCP4_SETUP_SH=/Applications/ccp4-9/bin/ccp4.setup-sh
+CCP4_SETUP_SH=/Applications/ccp4-9/bin/ccp4.setup-sh   # required for refinement
+# Optional — only if REFINE_TOOL lives in a conda env (servalcat does NOT):
 CONDA_SH=/Users/you/miniconda3/etc/profile.d/conda.sh
 PANDDA2_CONDA_ENV=pandda2
+# Optional — override the engine (default: servalcat; e.g. refmac5):
+# REFINE_TOOL=refmac5
 ```
 
-These are the **only** host-specific bits — they live outside the API and the
-job spec (the `JobRunner` seam absorbs "where/how"; the contract carries only
+You do **not** run activation by hand for the app — the backend sources
+`CCP4_SETUP_SH` (then the conda env if set) in a wrapper before each refinement.
+This is the **only** host-specific bit; it lives outside the API and the job
+spec (the `JobRunner` seam absorbs "where/how"; the contract carries only
 "what"). A different machine sets different values; nothing else changes.
 
 ### B.3 Verify the environment is wired
@@ -138,19 +134,30 @@ The runner dry-run-probes the activation at submit time and gates dispatch
 (with a clear reason) if it fails. To check manually:
 
 ```sh
-sh -c '. "$CCP4_SETUP_SH"; . "$CONDA_SH"; conda activate "$PANDDA2_CONDA_ENV"; \
-       command -v giant.quick_refine'
+sh -c '. "$CCP4_SETUP_SH"; command -v servalcat'
 ```
 
-It should print a path **inside your pandda2 conda env** (not inside CCP4). If
-it prints a CCP4 path or nothing, the activation/order is wrong — fix `.env`.
+It should print a path to `servalcat` inside your CCP4 install. If it prints
+nothing, CCP4 isn't set up — fix `CCP4_SETUP_SH` in `.env`. (You can also hit
+`GET /api/v1/jobs/refine_available/` — it returns the probe result the UI uses
+to gate dispatch.)
 
 ### B.4 Run a refinement
 
-With the backend running and a project ingested, dispatch via the API/UI; the
-job runs, writes its outputs under `<source_root>/jobs/<job_id>/`, and on
-success the refined model becomes the dataset's `current_model`.
-*(Endpoints/UI land with ROADMAP #4b — this section will gain exact steps then.)*
+With the backend running and a project ingested, dispatch via the API:
+
+```sh
+# submit a refinement of dataset <id>'s current-best model
+curl -s -X POST http://localhost:8000/api/v1/jobs/submit/ \
+  -H 'Content-Type: application/json' -d '{"dataset": <id>}'
+# poll until it leaves "running" (this also lands the result)
+curl -s http://localhost:8000/api/v1/jobs/<job_id>/
+```
+
+The job runs `servalcat refine_xtal_norefmac` under a per-job working dir
+(`<source_root>/jobs/<job_id>/`); on success the refined model is registered as
+an `Artifact(origin=refined)` and becomes the dataset's `current_model`
+(verified end-to-end on BAZ2B). A UI to drive this lands with ROADMAP #4b.
 
 ---
 
@@ -163,10 +170,11 @@ uses — see DESIGN §5.7). Copy `.env.example` to `.env` and edit. Summary:
 |---|---|---|
 | `PANDDA_DATA_ROOT` | Where ingested project trees live (artifact serving) | `<repo>/data` |
 | `PANDDA_DB_PATH` | SQLite file location | `<repo>/db.sqlite3` |
-| `PANDDA_JOBS_ROOT` | Where job working dirs are written | = `PANDDA_DATA_ROOT` |
-| `CCP4_SETUP_SH` | Path to CCP4 `ccp4.setup-sh` (tester only) | _(unset → refine gated)_ |
-| `CONDA_SH` | Path to conda `profile.d/conda.sh` (tester only) | _(unset → refine gated)_ |
-| `PANDDA2_CONDA_ENV` | Name of the PanDDA2 conda env (tester only) | _(unset → refine gated)_ |
+| `PANDDA_JOBS_ROOT` | Fallback root for job working dirs (per-project `source_root` is used when set) | = `PANDDA_DATA_ROOT` |
+| `CCP4_SETUP_SH` | Path to CCP4 `ccp4.setup-sh` (tester; required for refinement) | _(unset → refine gated)_ |
+| `CONDA_SH` | Path to conda `profile.d/conda.sh` (optional; conda-only tools) | _(unset)_ |
+| `PANDDA2_CONDA_ENV` | conda env to activate (optional; servalcat needs none) | _(unset)_ |
+| `REFINE_TOOL` | Refinement engine invoked after activation | `servalcat` |
 
 `.env` is git-ignored — it holds *your* machine's paths. Never commit it.
 
@@ -178,7 +186,7 @@ uses — see DESIGN §5.7). Copy `.env.example` to `.env` and edit. Summary:
   the active venv (it needs `drf-spectacular`).
 - **Artifact download 404** — the project's `source_root` (set at ingest) must
   still point at the on-disk tree; re-ingest with `--root` if you moved it.
-- **`giant.quick_refine` resolves to a CCP4 path** — wrong activation order; see
-  the footgun in §B.1 and re-check §B.3.
+- **`servalcat: command not found` / refine fails** — CCP4 isn't set up; check
+  `CCP4_SETUP_SH` in `.env` and re-run the probe in §B.3.
 - **Refinement dispatch disabled in the UI** — the activation probe failed;
   verify `.env` per §B.2–B.3.

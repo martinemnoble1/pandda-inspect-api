@@ -410,11 +410,18 @@ compose/Postgres binding leans on the same row-level lock harder.
 
 ### 5.6 Environment activation + gating — the layered-env reality
 
-`giant.quick_refine` is **not** a bare-PATH binary you can `shutil.which`. The
-one we want ships with **PanDDA2**, inside a **conda env**, and requires CCP4 to
-be set up too. Critically, **CCP4 also ships a PanDDA1 `giant.refine`** — so a
-naive "source CCP4, then `which`" finds the *wrong* tool. Getting the layering
-right is part of correctness, not just setup.
+> **Update (2026-05-31, after inspecting the actual install):** we are NOT
+> driving `giant.quick_refine` — see §5.8 for why and what replaced it. The
+> activation + probe + gating mechanism below stands unchanged; only the tool
+> behind `REFINE_TOOL` differs (now `servalcat`/`refmac5`, which DO ship in a
+> stock CCP4 setup and are found by the same probe). The conda-env layering
+> remains relevant for tools that live there.
+
+The refinement tool is **not** guaranteed to be a bare-PATH binary you can
+`shutil.which`. CCP4 tools need CCP4 set up; some PanDDA2 tools live in a conda
+env. Critically, **CCP4 ships more than one refine-ish tool** (e.g. a PanDDA1
+`giant.refine`) — so a naive "source CCP4, then `which`" can find the *wrong*
+one. Getting the layering right is part of correctness, not just setup.
 
 **Activation recipe (the layering): source CCP4 first, THEN activate the conda
 env**, so the PanDDA2 env's tools take precedence over CCP4's PanDDA1 ones:
@@ -508,4 +515,56 @@ time and a packaged static bundle can't read runtime env — but it only needs t
 API base URL, which is **same-origin** in both bindings (Electron and nginx serve
 the built client and proxy `/api`). So the client needs ~no runtime config,
 sidestepping the static-bundle-can't-read-env trap entirely.
-```
+
+### 5.8 Refinement engine — stock servalcat/refmac5, NOT giant.quick_refine
+
+**Decision (2026-05-31, after reading the installed source):** the runner drives
+**stock CCP4 refinement directly** — `servalcat` by default, `refmac5` as a
+fallback/override — rather than `giant.quick_refine`.
+
+Why, having inspected `giant/jiffies/quick_refine.py` + `giant/refinement/
+wrappers.py`:
+
+* `giant.quick_refine` is **not a refinement engine** — it is a ~260-line
+  launcher around REFMAC5/PHENIX. Its entire refmac-specific content is one
+  command: `refmac5 XYZIN/HKLIN/XYZOUT/HKLOUT [LIBIN merged.cif]` + stdin
+  (`NCYC n` … `END`). The only genuinely-useful extras are (a) merging multiple
+  ligand CIFs into one (refmac takes a single `LIBIN`), (b) versioned output
+  dirs (`refine_0001/…` — which **we already do in the DB**, DESIGN §1), and (c)
+  optional `split_conformations`.
+* The install on the dev machine may be **locally edited** (unversioned site-
+  packages; the maintainer suspected an in-place fix) — a **non-reproducible**
+  dependency, exactly what a contract-first, hand-to-colleagues design must
+  avoid. A tester with vanilla CCP4 must be able to run this.
+* `servalcat` is the modern CCP4 refinement front-end (wraps refmac, cleaner SF
+  handling, better support for the occupancy / multi-state work that §5.9 will
+  need). Hence default servalcat, refmac5 fallback. `REFINE_TOOL` selects.
+
+What we **port** from giant (the only non-trivial bits): CIF merging when a
+dataset has >1 ligand restraint file. What we **drop**: the giant dependency
+entirely. Versioned outputs are already the DB's job; split-conformations is a
+§5.9 concern, not the refine call's.
+
+### 5.9 Ground state + bound-fraction occupancy — an UPSTREAM (#4) concern
+
+There is genuine scientific debate about whether to refine the **bound state
+alone** vs a **two-state model** (fixed ground/apo state at occupancy `1−q`
+plus bound state at `q`, with `q` tied to the bound fraction ≈ `1−BDC`), which
+entails occupancy groups, altloc labelling, and occupancy
+refinement/constraints ("all sorts of occupancy manipulations").
+
+Key architectural finding: **none of that lives in the refine step.** Neither
+`quick_refine` nor its refmac wrapper touches occupancy/altloc/ground-state
+(verified by grep). The refine step refines *whatever model + occupancies it is
+handed*. So this debate is **upstream**, in the ligand-build / model-prep stage
+(#4), where the `current_model` is actually constructed.
+
+Consequence for scope: **step 3's refine is occupancy-agnostic and unblocked** —
+it drives servalcat/refmac on the model it's given. The single-state-vs-two-state
++ BDC→occupancy policy is a **#4 design decision** (what model we build and how
+we assign occupancies before refining), recorded here so it is not lost:
+
+> **#4 open question:** include the fixed ground state (two-state, occupancy
+> groups, BDC-derived bound fraction, altloc-clash avoidance) or refine the
+> bound state alone? Decide when building the ligand-placement step; it defines
+> what `Event.current_model` *is*.

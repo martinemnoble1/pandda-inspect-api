@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Artifact, Dataset, Event, Project, Shell
+from .models import Artifact, Dataset, Event, Job, Project, Shell
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -143,3 +143,33 @@ class ProjectSerializer(serializers.ModelSerializer):
             # Hit rate over reviewed events (None until any review happens).
             "hit_rate": (n_hits / n_reviewed) if n_reviewed else None,
         }
+
+
+class JobSerializer(serializers.ModelSerializer):
+    """A tracked compute job. Read-only over the contract; jobs are created via
+    the viewset's ``submit`` action, not by POSTing a Job directly."""
+
+    output_artifact_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Job
+        fields = [
+            "id",
+            "tool",
+            "dataset",
+            "event",
+            "status",
+            "spec",
+            "output_artifact",
+            "output_artifact_url",
+            "log_relpath",
+            "created_at",
+            "finished_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_output_artifact_url(self, obj):
+        if obj.output_artifact_id:
+            return f"/api/v1/artifacts/{obj.output_artifact_id}/download/"
+        return None

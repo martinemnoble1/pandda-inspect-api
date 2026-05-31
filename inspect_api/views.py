@@ -13,11 +13,14 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .importer import ImportError_, import_zip
-from .models import Artifact, Dataset, Event, Project, Shell
+from .jobs import get_runner
+from .jobservice import JobError, refresh_job, submit_refinement
+from .models import Artifact, Dataset, Event, Job, Project, Shell
 from .serializers import (
     ArtifactSerializer,
     DatasetSerializer,
     EventSerializer,
+    JobSerializer,
     ProjectSerializer,
     ShellSerializer,
 )
@@ -199,3 +202,84 @@ class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):
 class ShellViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Shell.objects.all()
     serializer_class = ShellSerializer
+
+
+class JobViewSet(
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Tracked compute jobs (refinement, …). Jobs are the single door through
+    which job-produced bytes enter the artifact model (DESIGN §2/§5):
+
+    * ``POST /jobs/submit/`` — dispatch a giant.quick_refine for a dataset.
+    * ``GET /jobs/{id}/`` — poll. Refreshes status from the runner's status
+      file and, on first observed success, lands the refined Artifact +
+      repoints Dataset.current_model (idempotent).
+    * ``GET /jobs/?dataset=… | ?project=…`` — list.
+    * ``POST /jobs/{id}/cancel/`` — terminate.
+    * ``GET /jobs/refine_available/`` — is the refinement env wired? (probe)
+    """
+
+    serializer_class = JobSerializer
+
+    def get_queryset(self):
+        qs = Job.objects.select_related("dataset", "output_artifact")
+        dataset = self.request.query_params.get("dataset")
+        if dataset:
+            qs = qs.filter(dataset_id=dataset)
+        project = self.request.query_params.get("project")
+        if project:
+            qs = qs.filter(dataset__project__name=project)
+        return qs
+
+    def retrieve(self, request, *args, **kwargs):
+        # Polling endpoint: refresh from the runner (lands output on first
+        # success) before serializing.
+        job = refresh_job(self.get_object())
+        return Response(self.get_serializer(job).data)
+
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "dataset": {"type": "integer"},
+                    "params": {"type": "object"},
+                },
+                "required": ["dataset"],
+            }
+        },
+        responses={201: JobSerializer, 400: OpenApiResponse(
+            description="Bad inputs or refinement env unavailable."
+        )},
+    )
+    @action(detail=False, methods=["post"])
+    def submit(self, request):
+        """Dispatch a refinement of a dataset's current-best model."""
+        dataset_id = request.data.get("dataset")
+        if not dataset_id:
+            return Response({"detail": "'dataset' is required."}, status=400)
+        dataset = Dataset.objects.filter(pk=dataset_id).first()
+        if dataset is None:
+            return Response({"detail": "No such dataset."}, status=404)
+        try:
+            job = submit_refinement(dataset, request.data.get("params"))
+        except JobError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(self.get_serializer(job).data, status=201)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Terminate a running job."""
+        job = self.get_object()
+        if job.runner_handle:
+            get_runner().cancel(job.runner_handle)
+        job = refresh_job(job)
+        return Response(self.get_serializer(job).data)
+
+    @action(detail=False, methods=["get"], url_path="refine_available")
+    def refine_available(self, request):
+        """Probe whether the refinement environment is wired (UI gating)."""
+        return Response(get_runner().probe())
