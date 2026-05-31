@@ -49,6 +49,10 @@ export interface PanddaEvent {
   inspected_by: string;
   inspected_at: string | null;
   artifacts: Artifact[];
+  // Coordinates the viewer should load: the built/refined model when one
+  // exists (event-scoped, else dataset-scoped), else null -> fall back to the
+  // apo "structure" artifact. Surfaces the autobuilt ligand.
+  current_model: Artifact | null;
 }
 export interface Dataset {
   id: number;

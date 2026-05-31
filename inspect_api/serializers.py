@@ -27,6 +27,12 @@ class EventSerializer(serializers.ModelSerializer):
     # (structure, ligand dicts). The structure is attached at dataset level (one
     # model per crystal, shared across its events), so surface it here too.
     artifacts = serializers.SerializerMethodField()
+    # The coordinates the viewer should load: the event's own current_model
+    # (a built ligand, event-scoped) if set, else the dataset's current_model
+    # (the analysis/refined whole-crystal model). Null ⇒ fall back to the apo
+    # ``structure`` artifact. This makes the built ligand appear without
+    # the client needing to know which of several STRUCTURE artifacts is best.
+    current_model = serializers.SerializerMethodField()
 
     @extend_schema_field(ArtifactSerializer(many=True))
     def get_artifacts(self, obj):
@@ -38,6 +44,11 @@ class EventSerializer(serializers.ModelSerializer):
             ]
         )
         return ArtifactSerializer(own + list(shared), many=True).data
+
+    @extend_schema_field(ArtifactSerializer(allow_null=True))
+    def get_current_model(self, obj):
+        model = obj.current_model or obj.dataset.current_model
+        return ArtifactSerializer(model).data if model else None
 
     class Meta:
         model = Event
@@ -62,6 +73,7 @@ class EventSerializer(serializers.ModelSerializer):
             "inspected_by",
             "inspected_at",
             "artifacts",
+            "current_model",
         ]
         # Analysis output is read-only; only the decision fields are writable.
         read_only_fields = [

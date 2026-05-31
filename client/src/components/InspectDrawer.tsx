@@ -114,10 +114,14 @@ export function InspectDrawer({
           await clearLoaded();
           loadedDtag.current = ev.dtag;
 
-          const struct = artifactOf(ev, "structure");
-          if (struct) {
+          // Prefer the current best model (the built/refined coords, which
+          // carry the ligand) over the apo input structure. current_model is
+          // the dataset's analysis/autobuild model (or a human build) when one
+          // exists; otherwise fall back to the imported "structure" artifact.
+          const model = ev.current_model ?? artifactOf(ev, "structure");
+          if (model) {
             const mol = newMolecule(commandCentre, store);
-            await mol.loadToCootFromURL(api.artifactUrl(struct), ev.dtag);
+            await mol.loadToCootFromURL(api.artifactUrl(model), ev.dtag);
             await mol.addRepresentation("CBs", "/*/*");
             dispatch(addMolecule(mol as any));
           }

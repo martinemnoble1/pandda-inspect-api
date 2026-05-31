@@ -62,6 +62,14 @@ class DatasetSpec:
     events: list[EventSpec] = field(default_factory=list)
     # Dataset-level imported artifacts (structure, data, z-map, ligands).
     artifacts: list[ArtifactSpec] = field(default_factory=list)
+    # Relpath of the analysis's own merged model (PanDDA2 autobuild
+    # pandda-model.pdb): a STRUCTURE artifact carrying the built ligand, but
+    # origin=imported (re-derivable analysis output, refreshed on re-ingest;
+    # "built"/"refined" are reserved for post-ingest human/job work). When
+    # present AND no human/job model has superseded it, it becomes the
+    # dataset's current_model so the viewer shows the built ligand. None ⇒ no
+    # analysis model (33/201 in BAZ2B); current_model stays unset.
+    current_model_relpath: str | None = None
 
 
 @dataclass
@@ -118,6 +126,10 @@ def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
         _apply_pointer_policy(
             ds, ds_inputs_before, ds_inputs_after, res
         )
+        # Point current_model at the analysis's own merged model (autobuild),
+        # unless a human/job model has superseded it (§1.3 — don't clobber
+        # post-ingest work).
+        _apply_analysis_model(ds, ds_spec, res)
 
     # Project-level imported artifacts (reports): replace wholesale.
     _replace_imported_project_artifacts(project, spec)
@@ -255,6 +267,11 @@ def _apply_pointer_policy(dataset, inputs_before, inputs_after, res):
     """
     inputs_drifted = inputs_before != inputs_after and bool(inputs_before)
 
+    # Re-read pointer state from the DB: _replace_imported_dataset_artifacts
+    # may have just deleted the imported artifact this pointer referenced (the
+    # SET_NULL nulls current_model_id), leaving the in-memory FK stale.
+    dataset.refresh_from_db(fields=["current_model"])
+
     # Dataset-level pointer (refined whole-crystal model).
     cm = dataset.current_model
     if cm is not None and cm.origin != Artifact.Origin.IMPORTED:
@@ -273,3 +290,27 @@ def _apply_pointer_policy(dataset, inputs_before, inputs_after, res):
                 event.save(update_fields=["inputs_changed"])
                 res.n_inputs_changed += 1
             res.n_built_preserved += 1
+
+
+def _apply_analysis_model(dataset, ds_spec, res):
+    """Point Dataset.current_model at the analysis's merged model (autobuild).
+
+    The model is an ``origin=imported`` STRUCTURE artifact already (re)created
+    by ``_replace_imported_dataset_artifacts`` from ``ds_spec.artifacts``. We
+    set it as current_model UNLESS a post-ingest human/job model
+    (``origin != imported``) currently holds the pointer — that work must not
+    be clobbered (§1.3). If the dataset has no analysis model, the pointer is
+    left as-is (a prior import model was just deleted, so SET_NULL cleared it).
+    """
+    relpath = ds_spec.current_model_relpath
+    if not relpath:
+        return
+    cm = dataset.current_model
+    if cm is not None and cm.origin != Artifact.Origin.IMPORTED:
+        return  # human/job model wins — leave it
+    model = dataset.artifacts.filter(
+        relpath=relpath, origin=Artifact.Origin.IMPORTED
+    ).first()
+    if model is not None and dataset.current_model_id != model.id:
+        dataset.current_model = model
+        dataset.save(update_fields=["current_model"])

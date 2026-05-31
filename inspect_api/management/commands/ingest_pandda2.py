@@ -144,6 +144,9 @@ class Command(BaseCommand):
                 },
                 events=self._build_events(root, dtag, rows_by_dtag[dtag]),
                 artifacts=self._dataset_artifacts(processed_dir, dtag),
+                current_model_relpath=self._analysis_model_relpath(
+                    processed_dir, dtag
+                ),
             )
             datasets.append(ds_spec)
 
@@ -203,7 +206,25 @@ class Command(BaseCommand):
                         f"{PROCESSED}/{dtag}/ligand_files/{lig.name}",
                     )
                 )
+        # The analysis's merged model (autobuild). A STRUCTURE artifact, but
+        # origin=imported (re-derivable analysis output). Catalogued here so
+        # the download view can serve it; set as current_model in reconcile so
+        # the viewer loads the built ligand. Distinct from the apo input pdb.
+        model_rel = Command._analysis_model_relpath(processed_dir, dtag)
+        if model_rel:
+            out.append(ArtifactSpec(Artifact.Kind.STRUCTURE, model_rel))
         return out
+
+    @staticmethod
+    def _analysis_model_relpath(processed_dir, dtag) -> str | None:
+        """Relpath of PanDDA2's merged autobuild model, if present.
+
+        ``modelled_structures/<dtag>-pandda-model.pdb`` — protein + built
+        ligand(s). Absent for ~1/6 of BAZ2B datasets (no autobuild); None then.
+        """
+        rel = f"{PROCESSED}/{dtag}/modelled_structures/{dtag}-pandda-model.pdb"
+        return rel if (processed_dir / dtag / "modelled_structures"
+                       / f"{dtag}-pandda-model.pdb").exists() else None
 
     # --- helpers ---
 
