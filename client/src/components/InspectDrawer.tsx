@@ -27,7 +27,6 @@ import {
   newMap,
   newMolecule,
   recentre,
-  setActiveMap,
   setContourLevel,
   type MoorhenMapLike,
 } from "../moorhen-shim";
@@ -194,7 +193,14 @@ export function InspectDrawer({
               ? sigma * map.mapRmsd
               : map.contourLevel ?? 1.0;
           dispatch(addMap(map as any));
-          dispatch(setActiveMap(map));
+          // NB: deliberately NOT setActiveMap here. Making this the active map
+          // mounts Moorhen's MapScrollWheelListener (MoorhenMapManager gates it
+          // on isMapActive), which reads map.mapCentre[0] unconditionally — and
+          // a freshly-loaded CCP4 map has mapCentre=null, crashing the render
+          // tree. We don't need the active map for inspect+contour: contour is
+          // dispatched by molNo (below), and the view follows the camera origin.
+          // The active map is a refinement-target concern — set it in #4 (ligand
+          // build / refine), where we'll also populate mapCentre properly.
           // Set the level via Redux — MoorhenMapManager re-contours off the
           // `contourLevels` slice, NOT off map.contourLevel (see shim note).
           dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
