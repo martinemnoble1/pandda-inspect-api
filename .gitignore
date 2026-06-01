@@ -4,3 +4,7 @@ __pycache__/
 db.sqlite3
 .DS_Store
 .env
+# PyInstaller freeze output (the binary is built in CI, never committed).
+build/
+dist/
+*.spec.bak

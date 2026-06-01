@@ -1,0 +1,8 @@
+# Extra deps for freezing the backend into a standalone binary (ROADMAP #6,
+# the Electron handover). Install on top of requirements.txt only when building
+# the frozen app: `pip install -r requirements.txt -r requirements-packaging.txt`.
+#
+# waitress is a RUNTIME dep of the frozen server (pure-Python WSGI server that
+# freezes cleanly — unlike fork-based gunicorn). pyinstaller is BUILD-only.
+waitress>=3.0
+pyinstaller>=6.10
