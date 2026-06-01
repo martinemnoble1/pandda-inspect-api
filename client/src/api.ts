@@ -9,6 +9,16 @@ export interface SiteSummary {
   n_events: number;
   n_hits: number;
 }
+// Raw (unbinned) distribution values backing the dashboard's native charts —
+// a live modernisation of PanDDA1's pandda_analyse.html graphs. The client
+// bins them. event_fraction = 1 − BDC (bound-state fraction). map_uncertainty
+// is deliberately absent (empty in PanDDA2 output).
+export interface Distributions {
+  event_fraction: number[];
+  event_resolution: number[];
+  dataset_resolution: number[];
+  r_free: number[];
+}
 export interface ProjectStatus {
   analysed: boolean;
   n_datasets: number;
@@ -22,6 +32,7 @@ export interface ProjectStatus {
   n_refined: number;
   hit_rate: number | null;
   sites: SiteSummary[];
+  distributions: Distributions;
 }
 export interface Project {
   id: number;

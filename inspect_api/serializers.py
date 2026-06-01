@@ -193,6 +193,28 @@ class ProjectSerializer(serializers.ModelSerializer):
                 current_model__origin=Artifact.Origin.REFINED,
             ).count()
         )
+        # Raw distribution arrays for the dashboard's native charts: a live,
+        # reader-agnostic modernisation of PanDDA1's pandda_analyse.html
+        # graphs (see pandda2-summary-distributions). Binning is the client's
+        # job — the contract just ships the non-null values. We OMIT
+        # map_uncertainty (empty in PanDDA2 output) and the 3D event renders
+        # (the Moorhen view replaces them).
+        def _vals(qs, fld):
+            return [
+                v for v in qs.values_list(fld, flat=True) if v is not None
+            ]
+
+        # Event fraction = bound-state fraction = 1 − BDC. (PanDDA2 has no
+        # event_fraction column; bdc is its analogue. Clamp to [0,1].)
+        event_fractions = [
+            max(0.0, min(1.0, 1.0 - b)) for b in _vals(events, "bdc")
+        ]
+        distributions = {
+            "event_fraction": event_fractions,
+            "event_resolution": _vals(events, "map_resolution"),
+            "dataset_resolution": _vals(obj.datasets, "analysed_resolution"),
+            "r_free": _vals(obj.datasets, "r_free"),
+        }
         # Per-site rollup (events per site + hits) — backs a small site table.
         site_rows = []
         seen = events.exclude(site_num__isnull=True).values_list(
@@ -219,6 +241,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             # Hit rate over reviewed events (None until any review happens).
             "hit_rate": (n_hits / n_reviewed) if n_reviewed else None,
             "sites": site_rows,
+            "distributions": distributions,
         }
 
 

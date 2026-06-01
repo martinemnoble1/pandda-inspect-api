@@ -11,16 +11,12 @@ import {
   Paper,
   Stack,
   Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
   Tabs,
   Typography,
 } from "@mui/material";
 import ScienceIcon from "@mui/icons-material/Science";
 import { api, type Artifact, type Project } from "../api";
+import { SummaryCharts } from "../components/SummaryCharts";
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
@@ -140,31 +136,7 @@ export function ProjectDashboard() {
             label={`${s.n_refined} crystals refined`}
           />
         </Stack>
-        {s.sites.length > 0 && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Event distribution over sites
-            </Typography>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Site</TableCell>
-                  <TableCell align="right">Events</TableCell>
-                  <TableCell align="right">Hits</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {s.sites.map((site) => (
-                  <TableRow key={site.site_num}>
-                    <TableCell>{site.site_num}</TableCell>
-                    <TableCell align="right">{site.n_events}</TableCell>
-                    <TableCell align="right">{site.n_hits}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        )}
+        <SummaryCharts distributions={s.distributions} sites={s.sites} />
       </Paper>
 
       <Typography variant="h6" gutterBottom>
