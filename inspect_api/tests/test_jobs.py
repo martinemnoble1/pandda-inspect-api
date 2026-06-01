@@ -35,6 +35,7 @@ def _make_stand_in_tool(tmp: Path, succeed=True) -> Path:
         "  shift\n"
         "done\n"
         '[ -n "$prefix" ] && printf "REFINED" > "${prefix}.pdb"\n'
+        '[ -n "$prefix" ] && printf "MTZ" > "${prefix}.mtz"\n'
         f"exit {rc}\n",
         encoding="utf-8",
     )
@@ -114,6 +115,33 @@ class RefinementLoopTests(TestCase):
         # The bytes are really on disk where the relpath says.
         self.assertTrue((self.root / refined.relpath).is_file())
 
+    def test_refine_lands_mtz_and_repoints_current_sf(self):
+        with self._settings(succeed=True):
+            resp = self.client.post(
+                reverse("job-submit"),
+                {"dataset": self.dataset.id}, content_type="application/json",
+            )
+            job_id = resp.json()["id"]
+            url = reverse("job-detail", args=[job_id])
+            _wait(lambda: self.client.get(url).json(),
+                  lambda d: d["status"] != "running")
+        # The servalcat MTZ landed as a refined OUTPUT_MTZ with explicit
+        # (refmac) map columns, and current_sf repointed to it.
+        mtz = Artifact.objects.get(
+            kind=Artifact.Kind.OUTPUT_MTZ, origin=Artifact.Origin.REFINED,
+            produced_by_id=job_id,
+        )
+        self.assertEqual(mtz.relpath, f"jobs/{job_id}/refine.mtz")
+        self.assertTrue((self.root / mtz.relpath).is_file())
+        self.assertTrue(
+            any(c["F"] == "2FOFCWT" for c in mtz.map_columns)
+        )
+        self.assertTrue(
+            any(c.get("isDifference") for c in mtz.map_columns)
+        )
+        self.dataset.refresh_from_db()
+        self.assertEqual(self.dataset.current_sf_id, mtz.id)
+
     def test_landing_is_idempotent(self):
         with self._settings(succeed=True):
             resp = self.client.post(
@@ -127,10 +155,17 @@ class RefinementLoopTests(TestCase):
             # Poll several more times — must not create extra artifacts.
             for _ in range(3):
                 self.client.get(url)
-        n_refined = Artifact.objects.filter(
+        # One land per job = one refined PDB + one refined MTZ; re-polls must
+        # not duplicate either (idempotency).
+        refined = Artifact.objects.filter(
             origin=Artifact.Origin.REFINED, produced_by_id=job_id
-        ).count()
-        self.assertEqual(n_refined, 1)
+        )
+        self.assertEqual(
+            refined.filter(kind=Artifact.Kind.STRUCTURE).count(), 1
+        )
+        self.assertEqual(
+            refined.filter(kind=Artifact.Kind.OUTPUT_MTZ).count(), 1
+        )
 
     def test_failed_tool_marks_failed_no_artifact(self):
         with self._settings(succeed=False):

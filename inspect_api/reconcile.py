@@ -45,6 +45,9 @@ class ArtifactSpec:
     # Optional embedded bytes for small dictionaries (ligand CIFs). When set,
     # stored in Artifact.contents and served from the DB rather than disk.
     contents: str = ""
+    # Optional explicit map-coefficient columns for MTZ artifacts (see
+    # Artifact.map_columns) — a list of {F, PHI, isDifference} dicts.
+    map_columns: list = field(default_factory=list)
 
 
 @dataclass
@@ -75,6 +78,11 @@ class DatasetSpec:
     # — the base every event's candidate pose is merged onto. None ⇒ no apo
     # input; current_model stays unset.
     current_model_relpath: str | None = None
+    # Relpath of the initial model-based-map MTZ = the dimple -pandda-input.mtz
+    # (origin=imported DATA_MTZ with 2FOFCWT/FOFCWT coefficients). Becomes
+    # Dataset.current_sf unless a refinement superseded it. The map analogue
+    # of current_model_relpath. None ⇒ current_sf stays unset.
+    current_sf_relpath: str | None = None
     # Best-available ligand-spec slot (cif|pdb|smiles|none) — recorded so the
     # UI can be honest about whether a restraint dictionary exists. Defaults to
     # "none"; the reader classifies it. See docs DESIGN §6.2.
@@ -260,6 +268,7 @@ def _replace_imported_dataset_artifacts(project, dataset, ds_spec) -> set:
             kind=a.kind,
             relpath=a.relpath,
             contents=a.contents,
+            map_columns=a.map_columns,
             origin=Artifact.Origin.IMPORTED,
         )
     return _imported_input_relpaths(dataset)
@@ -320,24 +329,34 @@ def _apply_pointer_policy(dataset, inputs_before, inputs_after, res):
 
 
 def _apply_start_model(dataset, ds_spec, res):
-    """Point Dataset.current_model at the apo start model (-pandda-input.pdb).
+    """Point Dataset.current_model at the apo start model (-pandda-input.pdb),
+    and Dataset.current_sf at the dimple map-MTZ (-pandda-input.mtz). Both are
+    the import-derived "starting" artifacts for the model and its model-based
+    maps respectively — set them UNLESS post-ingest work (origin != imported)
+    holds the pointer, which must not be clobbered (§1.3)."""
+    _set_imported_pointer(
+        dataset, "current_model", ds_spec.current_model_relpath
+    )
+    _set_imported_pointer(dataset, "current_sf", ds_spec.current_sf_relpath)
 
-    The model is an ``origin=imported`` STRUCTURE artifact already (re)created
-    by ``_replace_imported_dataset_artifacts`` from ``ds_spec.artifacts``. We
-    set it as current_model UNLESS a post-ingest human/job model
-    (``origin != imported``) currently holds the pointer — that work must not
-    be clobbered (§1.3). If the dataset has no apo input, the pointer is left
-    as-is (a prior import model was just deleted, so SET_NULL cleared it).
-    """
-    relpath = ds_spec.current_model_relpath
+
+def _set_imported_pointer(dataset, field, relpath):
+    """Set ``dataset.<field>`` to the imported artifact at ``relpath`` unless a
+    non-imported (human/job) artifact currently holds it. The artifact is one
+    ``_replace_imported_dataset_artifacts`` just (re)created; if ``relpath`` is
+    None or the artifact is absent, leave the pointer as-is."""
     if not relpath:
         return
-    cm = dataset.current_model
-    if cm is not None and cm.origin != Artifact.Origin.IMPORTED:
-        return  # human/job model wins — leave it
-    model = dataset.artifacts.filter(
+    # Re-read from the DB: _replace_imported_dataset_artifacts may have just
+    # deleted the artifact this pointer referenced (SET_NULL nulled the FK in
+    # the DB), leaving the in-memory cached FK stale.
+    dataset.refresh_from_db(fields=[field])
+    current = getattr(dataset, field)
+    if current is not None and current.origin != Artifact.Origin.IMPORTED:
+        return  # human/job artifact wins — leave it
+    art = dataset.artifacts.filter(
         relpath=relpath, origin=Artifact.Origin.IMPORTED
     ).first()
-    if model is not None and dataset.current_model_id != model.id:
-        dataset.current_model = model
-        dataset.save(update_fields=["current_model"])
+    if art is not None and getattr(dataset, f"{field}_id") != art.id:
+        setattr(dataset, field, art)
+        dataset.save(update_fields=[field])

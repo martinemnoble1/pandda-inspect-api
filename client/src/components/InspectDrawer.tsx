@@ -317,6 +317,25 @@ export function InspectDrawer({
           setContour(sigma);
         }
 
+        // Model-based maps from current_sf (dimple MTZ at first, refined
+        // servalcat MTZ after refinement): the 2mFo-DFc + mFo-DFc maps for
+        // judging the CURRENT model, alongside the event map. We pass the
+        // EXPLICIT declared columns (no Coot heuristics — we own the
+        // convention; see map-of-record). Cleaned by clearMaps each switch.
+        const sf = ev.current_sf;
+        if (sf && sf.map_columns?.length) {
+          for (const col of sf.map_columns) {
+            const mmap = newMap(commandCentre, store);
+            await mmap.loadToCootFromMtzURL(api.artifactUrl(sf), sf.relpath, {
+              F: col.F,
+              PHI: col.PHI,
+              isDifference: col.isDifference,
+              useWeight: false,
+            });
+            dispatch(addMap(mmap as any));
+          }
+        }
+
         // Overlay THIS event's autobuilt candidate pose as its own molecule —
         // only while it's NOT yet merged. pose_merged is now reliable (the apo
         // base means nothing is pre-merged; the merge action is the only thing

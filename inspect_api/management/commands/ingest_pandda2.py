@@ -40,6 +40,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
+from inspect_api.conventions import REFMAC_MAP_COLUMNS
 from inspect_api.models import Artifact
 from inspect_api.reconcile import (
     ArtifactSpec,
@@ -148,6 +149,11 @@ class Command(BaseCommand):
                 # pandda2), so every event is a candidate pose merged onto it.
                 # NOT the merged pandda-model.pdb (kept only as a reference).
                 current_model_relpath=self._start_model_relpath(
+                    processed_dir, dtag
+                ),
+                # Initial model-based-map MTZ = the dimple -pandda-input.mtz
+                # (has 2FOFCWT/FOFCWT coefficients); refinement repoints it.
+                current_sf_relpath=self._start_sf_relpath(
                     processed_dir, dtag
                 ),
                 ligand_source=self._classify_ligand_source(
@@ -260,8 +266,17 @@ class Command(BaseCommand):
             (f"{dtag}-z_map.native.ccp4", Artifact.Kind.OUTPUT_MTZ),
         ):
             if (ddir / fname).exists():
+                # The dimple input MTZ carries refmac map coefficients (its
+                # engine is refmac; verified 2FOFCWT/PH..+FOFCWT/PH..).
+                cols = (
+                    REFMAC_MAP_COLUMNS
+                    if kind == Artifact.Kind.DATA_MTZ
+                    else []
+                )
                 out.append(
-                    ArtifactSpec(kind, f"{PROCESSED}/{dtag}/{fname}")
+                    ArtifactSpec(
+                        kind, f"{PROCESSED}/{dtag}/{fname}", map_columns=cols
+                    )
                 )
         # Ligand restraint dictionary. PanDDA2's ligand_files/ is often empty;
         # the canonical CIF lives in the ORIGINAL data tree at
@@ -298,6 +313,18 @@ class Command(BaseCommand):
         rel = f"{PROCESSED}/{dtag}/{dtag}-pandda-input.pdb"
         return rel if (processed_dir / dtag
                        / f"{dtag}-pandda-input.pdb").exists() else None
+
+    @staticmethod
+    def _start_sf_relpath(processed_dir, dtag) -> str | None:
+        """Relpath of the initial model-based-map MTZ = the dimple
+        ``<dtag>-pandda-input.mtz`` (the pandda-input.mtz symlink targets the
+        dimple MTZ, which carries 2FOFCWT/FOFCWT coefficients). Already
+        catalogued as the DATA_MTZ artifact; becomes Dataset.current_sf. None if
+        absent.
+        """
+        rel = f"{PROCESSED}/{dtag}/{dtag}-pandda-input.mtz"
+        return rel if (processed_dir / dtag
+                       / f"{dtag}-pandda-input.mtz").exists() else None
 
     @staticmethod
     def _analysis_model_relpath(processed_dir, dtag) -> str | None:

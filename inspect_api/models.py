@@ -70,6 +70,19 @@ class Dataset(models.Model):
         null=True,
         blank=True,
     )
+    # The model-based-map source: an MTZ with 2mFo-DFc / mFo-DFc coefficients,
+    # from which the client computes the direct + difference maps for judging
+    # the CURRENT model. The map analogue of current_model: at ingest it's the
+    # dimple -pandda-input.mtz (apo-model maps); a refinement repoints it to the
+    # servalcat output MTZ (refined-model maps). Distinct from the per-event
+    # PanDDA event map (persistent hit evidence). See the map-of-record note.
+    current_sf = models.ForeignKey(
+        "Artifact",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
     # Raised by a re-ingest when the underlying imported bytes changed while
     # current_model points at a human/job artifact — "the analysis under this
     # built model changed; a human should look" (surface, don't resolve, §1.3).
@@ -247,6 +260,16 @@ class Artifact(models.Model):
     # self-contained (survives the data/ tree moving post-ingest). When set,
     # the download view serves this instead of reading ``relpath`` off disk.
     contents = models.TextField(blank=True, default="")
+
+    # For MTZ artifacts: the EXPLICIT map-coefficient column convention, so the
+    # client computes maps with declared labels (no Coot column heuristics — we
+    # own every convention; the contract-first choice, and it keeps the
+    # refinement engine swappable since each executor declares its own). A list
+    # of {"F","PHI","isDifference"} dicts, one per map to compute, e.g.
+    # [{"F":"2FOFCWT","PHI":"PH2FOFCWT","isDifference":false},
+    #  {"F":"FOFCWT","PHI":"PHFOFCWT","isDifference":true}]. Empty for non-MTZ
+    # artifacts. See the map-of-record note.
+    map_columns = models.JSONField(default=list, blank=True)
 
     # --- lineage (see docs/DESIGN-artifacts-and-jobs.md §1) ---
     origin = models.CharField(

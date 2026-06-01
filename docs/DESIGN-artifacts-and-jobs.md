@@ -642,3 +642,31 @@ A `Dataset.ligand_source` field (cif|pdb|smiles|none) classified at ingest,
 surfaced in the API so the UI can honestly badge "no restraint dictionary"
 instead of silently degrading. Dict recovery/generation for the non-cif cases is
 future work (the RDKit-workflow-recovery problem, not orthogonal regeneration).
+
+## 7. Maps: a persistent event map + an evolving model-based map
+
+Two distinct map roles, surfaced together (map-of-record note):
+
+* **Event map** (`<dtag>-event_N_..._map.native.ccp4`) — BDC-corrected,
+  per-event, bound-state *hit evidence*. Persistent; loaded as a direct CCP4
+  map. Always relevant for judging a candidate.
+* **Model-based map** (2mFo-DFc direct + mFo-DFc difference) — computed from an
+  MTZ against the *current model*, the **map analogue of `current_model`**,
+  tracked by **`Dataset.current_sf`** (FK → the map-coefficient MTZ artifact):
+  - **initial** = the dimple `-pandda-input.mtz` (origin=imported) — already
+    ingested; reflects the apo input model;
+  - **post-refine** = servalcat's output MTZ (origin=refined, produced_by=job),
+    landed by `_land` alongside the refined PDB and repointing `current_sf`
+    (write-once, mirrors `current_model` lineage).
+
+**Explicit columns, not Coot heuristics (§7.1).** Each MTZ artifact carries
+`Artifact.map_columns` — the declared map-coefficient column convention
+(`[{F,PHI,isDifference}, …]`). We own every convention end-to-end (contract-
+first) rather than relying on Coot's column-guessing, AND because the refinement
+executor is a swappable seam, each engine declares its own columns
+(`inspect_api/conventions.py`, keyed by tool). dimple's engine IS refmac, so the
+dimple MTZ + servalcat (refmac-backed) share the REFMAC convention
+(`2FOFCWT/PH2FOFCWT` + `FOFCWT/PHFOFCWT`). The client loads each map with the
+declared labels via `loadToCootFromMtzURL`. Verified end-to-end on BAZ2B: ingest
+sets `current_sf` = dimple MTZ; a real servalcat refine repoints it to the
+output MTZ with the right columns.

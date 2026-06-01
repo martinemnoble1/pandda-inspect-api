@@ -49,6 +49,7 @@ def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8):
                     ArtifactSpec(Artifact.Kind.DATA_MTZ, "ds1-input.mtz"),
                 ],
                 current_model_relpath=struct_relpath,
+                current_sf_relpath="ds1-input.mtz",
             )
         ],
     )
@@ -162,6 +163,14 @@ class StartModelPointerTests(TestCase):
         self.assertIsNotNone(ds.current_model_id)
         self.assertEqual(ds.current_model.relpath, APO)
         self.assertEqual(ds.current_model.origin, Artifact.Origin.IMPORTED)
+
+    def test_dimple_mtz_becomes_current_sf(self):
+        # The model-based-map MTZ slot starts at the dimple input MTZ.
+        reconcile_project(_spec())
+        ds = Dataset.objects.get(dtag="ds1")
+        self.assertIsNotNone(ds.current_sf_id)
+        self.assertEqual(ds.current_sf.relpath, "ds1-input.mtz")
+        self.assertEqual(ds.current_sf.origin, Artifact.Origin.IMPORTED)
 
     def test_human_model_not_clobbered_by_apo(self):
         # A human/job built model on the pointer must survive re-ingest (the

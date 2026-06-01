@@ -20,6 +20,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from .conventions import map_columns_for_tool
 from .jobs import JobSpec, get_runner
 from .models import Artifact, Dataset, Job
 
@@ -204,7 +205,26 @@ def _land(job: Job, status: dict) -> Job:
         produced_by=job,
     )
     dataset.current_model = refined
-    dataset.save(update_fields=["current_model"])
+
+    # Also land the refined MTZ (servalcat's map coefficients) and repoint
+    # current_sf, so the client's model-based maps now reflect the refined
+    # model (map analogue of current_model; the map-of-record note).
+    out_mtz = (status.get("outputs") or {}).get("mtz")
+    if out_mtz:
+        refined_mtz = Artifact.objects.create(
+            project=dataset.project,
+            dataset=dataset,
+            kind=Artifact.Kind.OUTPUT_MTZ,
+            relpath=_refined_relpath(dataset, job, out_mtz),
+            origin=Artifact.Origin.REFINED,
+            parent=dataset.current_sf,
+            produced_by=job,
+            # Declare the engine's map-coefficient columns explicitly (no Coot
+            # heuristics) — keyed off the tool that produced this MTZ.
+            map_columns=map_columns_for_tool(job.tool),
+        )
+        dataset.current_sf = refined_mtz
+    dataset.save(update_fields=["current_model", "current_sf"])
 
     job.output_artifact = refined
     job.status = Job.Status.SUCCEEDED

@@ -13,6 +13,9 @@ class ArtifactSerializer(serializers.ModelSerializer):
         fields = [
             "id", "kind", "relpath", "project", "dataset", "event",
             "download_url",
+            # Explicit map-coefficient columns for MTZ artifacts (the client
+            # computes maps with these labels — no Coot column heuristics).
+            "map_columns",
         ]
 
     @extend_schema_field(serializers.CharField())
@@ -38,6 +41,10 @@ class EventSerializer(serializers.ModelSerializer):
     # ``structure`` artifact. This makes the built ligand appear without
     # the client needing to know which of several STRUCTURE artifacts is best.
     current_model = serializers.SerializerMethodField()
+    # The model-based-map MTZ (dimple at ingest, refined servalcat MTZ after
+    # refinement) — the client computes 2mFo-DFc + mFo-DFc maps from it to
+    # judge the current model. Null ⇒ no map MTZ. See the map-of-record note.
+    current_sf = serializers.SerializerMethodField()
 
     @extend_schema_field(ArtifactSerializer(many=True))
     def get_artifacts(self, obj):
@@ -57,6 +64,11 @@ class EventSerializer(serializers.ModelSerializer):
     def get_current_model(self, obj):
         model = obj.current_model or obj.dataset.current_model
         return ArtifactSerializer(model).data if model else None
+
+    @extend_schema_field(ArtifactSerializer(allow_null=True))
+    def get_current_sf(self, obj):
+        sf = obj.dataset.current_sf
+        return ArtifactSerializer(sf).data if sf else None
 
     class Meta:
         model = Event
@@ -86,6 +98,7 @@ class EventSerializer(serializers.ModelSerializer):
             "inspected_at",
             "artifacts",
             "current_model",
+            "current_sf",
             "ligand_source",
         ]
         # Analysis output is read-only; only the decision fields are writable.

@@ -20,6 +20,11 @@ export interface Project {
   ingested_at: string;
   status: ProjectStatus;
 }
+export interface MapColumn {
+  F: string;
+  PHI: string;
+  isDifference: boolean;
+}
 export interface Artifact {
   id: number;
   kind: string;
@@ -28,6 +33,9 @@ export interface Artifact {
   dataset: number | null;
   event: number | null;
   download_url: string;
+  // For MTZ artifacts: explicit map-coefficient columns (one per map to
+  // compute). The client loads with these labels — no Coot heuristics.
+  map_columns: MapColumn[];
 }
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 export interface Job {
@@ -83,6 +91,10 @@ export interface PanddaEvent {
   // exists (event-scoped, else dataset-scoped), else null -> fall back to the
   // apo "structure" artifact. Surfaces the autobuilt ligand.
   current_model: Artifact | null;
+  // The model-based-map MTZ (dimple at ingest, refined servalcat MTZ after
+  // refinement). The client auto-reads it into 2mFo-DFc + mFo-DFc maps to judge
+  // the current model. null -> no model-map source.
+  current_sf: Artifact | null;
 }
 export interface Dataset {
   id: number;
