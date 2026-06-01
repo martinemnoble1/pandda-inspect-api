@@ -126,18 +126,25 @@ typed wrappers in `client/src/moorhen-shim.ts`:
   spot regardless of `setOrigin`. **Fix: set `map.isEM=false;
   map.isOriginLocked=false` after load.** (MTZ maps never hit this path — that's
   why it only affects event maps.)
-- **Contour units:** Coot's contour API is in **ABSOLUTE map units**, not σ.
-  Convert: `level = sigma * map.mapRmsd` (Moorhen's own default logic does this).
-  A bare `1.0` absolute gives an arbitrary level for any map whose RMSD isn't ~1.
+- **Contour units — event maps are ABSOLUTE, model maps are σ.** Coot's contour
+  API always wants absolute map units. For model maps (full-cell X-ray), σ is
+  meaningful, so convert `level = sigma * map.mapRmsd` (Moorhen's own default
+  logic). For **event maps, DO NOT use σ at all**: the BDC-corrected box is
+  mostly flat-zero outside the event, so the whole-box `mapRmsd` is tiny (~0.13
+  for BAZ2B) and `σ = level/RMSD` blows up to a meaningless ~18 (the symptom: a
+  σ slider pinned at its rail). The native scale IS absolute — pandda2's
+  "Optimal Contour" (~2.4), Coot's `suggestedContourLevel` (~0.8) and the
+  applied level all sit on it. So `LoadedMap.unit` is `"absolute"` for event
+  maps, `"sigma"` for model maps; the slider/label work in that unit and
+  `onContour` only `* mapRmsd` for the σ case. See contour-units memory.
 - **Default level:** event maps are **BDC-corrected** (bound-state density
   restored toward full occupancy) → viewed like a normal 2Fo-Fc map (single
   positive contour, `isDifference=false`), NOT an Fo-Fc difference map at ±3σ.
-  Default `DEFAULT_EVENT_SIGMA = 5.0` (BDC inflates the σ scale sharply, so low
-  σ drowns in bulk and the event reads best up around 5σ). Ideal level is
-  dataset/event-dependent — the slider retunes, and the per-event events.yaml
-  "Optimal Contour" overrides the default when present. The contour slider's
-  range is role-dependent: event maps get headroom to `EVENT_SIGMA_MAX` (12σ),
-  model 2mFo-DFc to `MAP_SIGMA_MAX` (5σ), mFo-DFc to `DIFF_SIGMA_MAX` (8σ).
+  Seed the event contour (absolute) from the per-event events.yaml "Optimal
+  Contour" when present, else Coot's `suggestedContourLevel`, else
+  `DEFAULT_EVENT_LEVEL = 2.0`. Absolute slider range 0–`EVENT_LEVEL_MAX` (6.0).
+  Model maps default `DEFAULT_2FOFC_SIGMA = 1.5` / `DEFAULT_FOFC_SIGMA = 3.0`,
+  σ slider to `MAP_SIGMA_MAX` (5σ) / `DIFF_SIGMA_MAX` (8σ).
 - Load order: **recentre BEFORE loading the map** so its first contour lands on
   the event.
 

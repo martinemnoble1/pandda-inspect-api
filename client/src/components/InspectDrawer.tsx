@@ -81,34 +81,34 @@ interface Props {
   cootInitialized: boolean;
 }
 
-// Default contour level (in σ) for PanDDA event maps. BDC correction restores
-// the bound-state density toward full occupancy, which sharply inflates the σ
-// scale — empirically the binding event reads best around ~5σ, with low σ
-// drowning in bulk. The ideal level is dataset/event-dependent (the slider
-// retunes, and per-event events.yaml "Optimal Contour" overrides when present).
-const DEFAULT_EVENT_SIGMA = 5.0;
-// Upper end of the contour slider (σ). Event maps run hot post-BDC, so they get
-// generous headroom above the ~5σ default; model maps need far less.
-const EVENT_SIGMA_MAX = 12;
-const MAP_SIGMA_MAX = 5;
-const DIFF_SIGMA_MAX = 8;
-// Default contour (σ) for a 2mFo-DFc direct map and an mFo-DFc difference map.
+// PanDDA event maps are contoured in ABSOLUTE map units, not σ. They're
+// BDC-corrected real-space maps whose box is mostly flat-zero outside the event
+// — so the whole-box RMSD is tiny (~0.13 for BAZ2B) and σ = level/RMSD is a
+// meaningless ~18, which is why a σ slider pinned at the rail. The native unit
+// here IS absolute: pandda2's "Optimal Contour" and Coot's suggestedContour
+// level are both absolute on this scale (~0.8–2.4 for BAZ2B). So event maps get
+// an absolute slider seeded from optimal_contour (else Coot's suggestion, else
+// a fallback). See contour-units memory.
+const DEFAULT_EVENT_LEVEL = 2.0; // absolute fallback when no per-event hint
+const EVENT_LEVEL_MAX = 6.0; // absolute slider ceiling for event maps
+// Model-based maps stay in σ (their RMSD is meaningful — full-cell X-ray maps).
 const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
+const MAP_SIGMA_MAX = 5;
+const DIFF_SIGMA_MAX = 8;
 
 // A map currently loaded in the viewer, with the UI state to contour + toggle
-// it. ``map`` is the live MoorhenMap (for RMSD-aware σ→absolute conversion);
-// the rest drives the per-map control row.
+// it. ``map`` is the live MoorhenMap. The slider works in this map's native
+// ``unit``: event maps in ABSOLUTE map units (their box-RMSD is tiny/unusable),
+// model maps in σ (converted to absolute via RMSD when applied). ``sliderValue``
+// is the value in that unit; Coot always receives absolute.
 interface LoadedMap {
   map: MoorhenMapLike;
   molNo: number;
   label: string;
-  sigma: number; // current contour in σ
+  unit: "sigma" | "absolute";
+  sliderValue: number; // contour in this map's `unit`
   isDifference: boolean;
-  // Event maps (BDC-corrected) run hot and get a wider slider range than the
-  // model-based 2mFo-DFc map, which is also non-difference. Distinguishes the
-  // two cases that share isDifference=false.
-  isEvent: boolean;
   visible: boolean;
 }
 
@@ -314,52 +314,28 @@ export function InspectDrawer({
           // follows the origin like a normal X-ray map.
           map.isEM = false;
           map.isOriginLocked = false;
-          // Contour level: Coot's contour API works in ABSOLUTE map units, so a
-          // sigma level must be multiplied by the map RMSD (Moorhen's own
-          // default-contour logic does exactly this — MoorhenMapManager).
-          // Passing a bare 1.0 absolute (as before) gives an arbitrary level for
-          // any map whose RMSD isn't ~1, which is why event maps looked wrong.
+          // Contour level — event maps are contoured in ABSOLUTE map units, NOT
+          // σ (see contour-units memory + the constants above). The box is
+          // mostly flat-zero outside the event, so the whole-box RMSD is tiny
+          // (~0.13) and σ = level/RMSD blows up to a meaningless ~18 that pins
+          // the slider at its rail. The native scale here is absolute, and three
+          // signals agree on it: pandda2's "Optimal Contour" (~2.4, a per-event
+          // threshold on raw BDC-corrected map values), Coot's own
+          // suggestedContourLevel (~0.8), and the level we apply — all absolute.
           //
-          // PanDDA event maps are BDC-corrected: the bound-state ligand density
-          // is restored toward full occupancy, so they are viewed like a normal
-          // 2Fo-Fc map (single positive contour) — NOT like an Fo-Fc difference
-          // map at ±3σ. Hence isDifference stays false. Default ~5σ: BDC
-          // correction inflates the σ scale sharply, so low σ drowns in bulk and
-          // the binding-event density reads best up around 5σ. The right level
-          // varies by dataset/event, so the user can retune via the slider
-          // (which gives event maps headroom up to EVENT_SIGMA_MAX).
-          // Prefer this event's autobuild-tuned contour (events.yaml "Optimal
-          // Contour") when present — the level the fitted ligand reads best at
-          // — else the generic BDC default.
-          //
-          // UNITS (verified against pandda2 source + Moorhen source):
-          //  • "Optimal Contour" is in ABSOLUTE map units. pandda2 computes it
-          //    as a threshold on raw BDC-corrected event-map sample values
-          //    (autobuild/inbuilt.py get_optimal_signal_contour), NOT in σ.
-          //    Its range here is ~0.18–9 (median ~1.2), tracking each map's
-          //    absolute density scale — exactly what you'd expect of absolutes,
-          //    not σ-multiples.
-          //  • Moorhen's stored contourLevel is ALSO absolute: MoorhenMapManager
-          //    seeds it as `nσ * mapRmsd`, and the map card slider shows
-          //    `level/mapRmsd` as σ and writes back `σ * mapRmsd`.
-          // So: pass optimal_contour straight through (already absolute); only
-          // the σ-based DEFAULT needs `* mapRmsd`. The previous code multiplied
-          // the absolute optimal_contour by rmsd too, collapsing it to a tiny
-          // arbitrary level — the "looks wrong" bug.
-          const rmsd =
-            typeof map.mapRmsd === "number" && map.mapRmsd > 0
-              ? map.mapRmsd
-              : 1.0;
-          const hasOptimal =
-            ev.optimal_contour != null && ev.optimal_contour > 0;
-          // ``level`` is absolute (what Coot wants); ``sigma`` is the σ-domain
-          // value the slider edits (converts back via rmsd in onContour).
-          const level = hasOptimal
-            ? (ev.optimal_contour as number)
-            : DEFAULT_EVENT_SIGMA * rmsd;
-          const sigma = hasOptimal
-            ? (ev.optimal_contour as number) / rmsd
-            : DEFAULT_EVENT_SIGMA;
+          // BDC correction restores bound-state density toward full occupancy,
+          // so these are viewed like a normal 2Fo-Fc map (single positive
+          // contour, isDifference=false), NOT an Fo-Fc difference map. Seed from
+          // the per-event optimal_contour when present (the level the fitted
+          // ligand reads best at), else Coot's suggestion, else a fallback. The
+          // slider (absolute, 0–EVENT_LEVEL_MAX) lets the user retune.
+          const level =
+            ev.optimal_contour != null && ev.optimal_contour > 0
+              ? (ev.optimal_contour as number)
+              : typeof map.suggestedContourLevel === "number" &&
+                map.suggestedContourLevel > 0
+              ? map.suggestedContourLevel
+              : DEFAULT_EVENT_LEVEL;
           dispatch(addMap(map as any));
           // NB: deliberately NOT setActiveMap here. Making this the active map
           // mounts Moorhen's MapScrollWheelListener (MoorhenMapManager gates it
@@ -376,9 +352,9 @@ export function InspectDrawer({
             map,
             molNo: map.molNo,
             label: "Event",
-            sigma,
+            unit: "absolute",
+            sliderValue: level,
             isDifference: false,
-            isEvent: true,
             visible: true,
           });
         }
@@ -413,9 +389,9 @@ export function InspectDrawer({
               map: mmap,
               molNo: mmap.molNo,
               label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
-              sigma: msigma,
+              unit: "sigma",
+              sliderValue: msigma,
               isDifference: col.isDifference,
-              isEvent: false,
               visible: true,
             });
           }
@@ -473,19 +449,24 @@ export function InspectDrawer({
   );
   loadEventRef.current = loadEvent;
 
-  // Contour ONE of the loaded maps (by molNo). Slider is in σ; Coot contours
-  // in ABSOLUTE units, so multiply by that map's RMSD. Dispatch — the
+  // Contour ONE of the loaded maps (by molNo). The slider value is in that
+  // map's native unit: event maps ABSOLUTE (pass straight to Coot), model maps
+  // σ (multiply by RMSD — Coot always contours in absolute). Dispatch — the
   // MapManager redraws off the Redux contourLevels slice (poking
   // map.contourLevel + drawMapContour does not re-render).
   const onContour = useCallback(
-    (molNo: number, sigma: number) => {
+    (molNo: number, value: number) => {
       setMaps((prev) =>
-        prev.map((m) => (m.molNo === molNo ? { ...m, sigma } : m))
+        prev.map((m) =>
+          m.molNo === molNo ? { ...m, sliderValue: value } : m
+        )
       );
       const m = maps.find((x) => x.molNo === molNo);
       const rmsd = m?.map.mapRmsd;
       const level =
-        typeof rmsd === "number" && rmsd > 0 ? sigma * rmsd : sigma;
+        m?.unit === "sigma" && typeof rmsd === "number" && rmsd > 0
+          ? value * rmsd
+          : value;
       dispatch(setContourLevel({ molNo, contourLevel: level }));
     },
     [dispatch, maps]
@@ -1273,20 +1254,21 @@ export function InspectDrawer({
                     noWrap
                     sx={{ width: 96, flexShrink: 0 }}
                   >
-                    {m.label} {m.sigma.toFixed(1)}σ
+                    {m.label} {m.sliderValue.toFixed(2)}
+                    {m.unit === "sigma" ? "σ" : ""}
                   </Typography>
                   <Slider
                     size="small"
                     min={0}
                     max={
-                      m.isEvent
-                        ? EVENT_SIGMA_MAX
+                      m.unit === "absolute"
+                        ? EVENT_LEVEL_MAX
                         : m.isDifference
                         ? DIFF_SIGMA_MAX
                         : MAP_SIGMA_MAX
                     }
                     step={0.05}
-                    value={m.sigma}
+                    value={m.sliderValue}
                     disabled={!m.visible}
                     onChange={(_, v) =>
                       onContour(m.molNo, Array.isArray(v) ? v[0] : v)
