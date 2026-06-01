@@ -64,10 +64,14 @@ def land_built_model(event: Event, pdb_text: str) -> Artifact:
         raise BuildError("no atoms in the submitted model")
 
     dataset = event.dataset
-    # Lineage parent: the model that was merged into (current best, else the
-    # imported structure). Records what this build derived from.
+    # Lineage parent: the model that was merged into — the current best
+    # (accumulates: merging successive events builds onto the prior built
+    # model), else the APO input. There are now two STRUCTURE artifacts (apo
+    # input + the reference merged model), so the fallback matches the apo
+    # input explicitly by relpath suffix — NOT the merged reference model.
     parent = dataset.current_model or dataset.artifacts.filter(
-        kind=Artifact.Kind.STRUCTURE
+        kind=Artifact.Kind.STRUCTURE,
+        relpath__endswith="-pandda-input.pdb",
     ).order_by("id").first()
 
     out_dir, relprefix = _next_build_dir(dataset)

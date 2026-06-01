@@ -50,6 +50,16 @@ PanDDA2 ingest facts that bit us (all real, from a BAZ2B run):
   lift the three scores onto `Event.{build_score,rscc,optimal_contour}`. The
   frontend seeds the contour slider from `optimal_contour` and badges built
   event-chips.
+- **Crystal START model = the apo `-pandda-input.pdb`** (ligand-free), set as
+  `Dataset.current_model` at ingest — NOT the merged `pandda-model.pdb`. Every
+  event is then a *candidate* pose merged onto apo; merges accumulate
+  (`current_model` lineage chains apo ← +L1 ← +L2 …). The merged
+  `pandda-model.pdb` is still catalogued but only as a machine-opinion
+  **reference** artifact (a second `structure` artifact — so anything picking
+  "the structure" must disambiguate by the `-pandda-input.pdb` suffix).
+  `Event.pose_merged` is null at ingest (nothing pre-merged) and set True only
+  by the merge action. Rationale + the bugs this avoids: the apo-start-model
+  design note + DESIGN §1.2.
   - **GOTCHA (cost real time):** `_reconcile_events` creates the pose, but
     `_replace_imported_dataset_artifacts` runs *after* and deletes every
     imported dataset artifact NOT in its `.exclude(kind__in=...)` list — a new

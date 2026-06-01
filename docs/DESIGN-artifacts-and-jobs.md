@@ -99,6 +99,22 @@ so the granularity "mismatch" is a feature, not a wart:
 `giant.quick_refine` therefore *consumes* the dataset input pdb + its built
 ligands and *emits* one refined pdb that repoints `Dataset.current_model`.
 
+> **Start-model decision (2026-06-01, apo-start-model note).** At ingest,
+> `Dataset.current_model` is the **apo `-pandda-input.pdb`** (ligand-free, what
+> went *into* PanDDA2), **not** PanDDA2's merged `pandda-model.pdb`. So every
+> event begins a *candidate* autobuilt pose; the human merges poses onto the apo
+> base, and `Dataset.current_model` **accumulates** them (each merge's lineage
+> parent = the prior model). This treats all events identically and removes the
+> failure modes of starting from a partially-built model (a pose_merged
+> heuristic to tell pre-baked from not, false-positive overrides, and a
+> duplicate-interpretation bug). The merged `pandda-model.pdb` is kept only as a
+> machine-opinion *reference* artifact (like `score`/`interesting`), never
+> `current_model`. `Event.pose_merged` is set True only by the merge action.
+> (Accumulation is a deliberate simplification: each event induces local protein
+> changes and represents a population averaging composite, interdependent
+> states; the refineable artifact for now is the accumulated fragment hits on
+> apo. Richer multi-state modelling is future work.)
+
 **The write-once invariant becomes mechanical.** A `built`/`refined` artifact is
 always a *new row* with new bytes at a new relpath. The old row is never
 mutated; the pointer just moves. Full history = walk `parent`. "What's best
@@ -375,8 +391,10 @@ source_root *before* following symlinks — `views.py`) already permits it becau
 The runner resolves a `JobSpec` (which names *what*, never *where*) to paths at
 submit time:
 
-* **input PDB** = `Dataset.current_model` if set, else the dataset's imported
-  `structure` artifact;
+* **input PDB** = `Dataset.current_model` if set (the accumulated built model),
+  else the apo `-pandda-input.pdb` (matched by relpath suffix — there are two
+  imported `structure` artifacts now, the apo input and the reference
+  `pandda-model.pdb`, and refine/build must start from the apo one);
 * **MTZ** = the dataset's `data_mtz` artifact;
 * **restraints** = the dataset's `ligand` CIF artifact(s).
 

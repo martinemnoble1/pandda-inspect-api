@@ -45,16 +45,14 @@ export const bestQuality = (events: PanddaEvent[]): number | null =>
   }, null);
 
 /**
- * Per-event ligand state, distinguishing what's only a CANDIDATE from what's
- * actually built into the crystal model (the inconsistency where all events
- * showed "built" but only one ligand was in the merged model):
- *  - "merged":    an autobuilt pose exists AND is accepted into the crystal
- *                 model (pose_merged === true) — a real built ligand here.
- *  - "candidate": an autobuilt pose exists but is NOT in the model
- *                 (pose_merged === false/null) — a proposal to merge.
+ * Per-event ligand state. The crystal start-model is the apo input, so every
+ * event begins a CANDIDATE; a pose becomes "merged" only when the human merges
+ * it (pose_merged set True by the merge action — never at ingest):
+ *  - "merged":    pose_merged === true — the human has built this pose into the
+ *                 (accumulating) crystal model.
+ *  - "candidate": an autobuilt pose exists but isn't merged yet — a proposal.
  *  - "none":      no autobuilt pose for this event.
- * current_model is per-crystal, so it can't tell these apart — pose_merged
- * (matched at ingest) is the per-event truth. See per-event-vs-crystal-model.
+ * See the apo-start-model note.
  */
 export type EventPoseState = "merged" | "candidate" | "none";
 export const eventPoseState = (ev: PanddaEvent): EventPoseState => {

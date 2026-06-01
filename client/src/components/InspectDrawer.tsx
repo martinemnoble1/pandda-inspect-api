@@ -119,17 +119,6 @@ export function InspectDrawer({
   // dataset) — the merge target + what we export to persist a build.
   const modelMolRef = useRef<MoorhenMoleculeLike | null>(null);
   const [merging, setMerging] = useState(false);
-  // Event ids the user has overridden as "not actually merged" — pose_merged
-  // is a centroid-match heuristic and can false-positive (a pose flagged merged
-  // when its ligand isn't really in the model). This session-level override
-  // re-treats such an event as a candidate: overlay the pose + allow merge.
-  const [forceCandidate, setForceCandidate] = useState<Set<number>>(
-    new Set()
-  );
-  // Ref mirror so loadEvent (and a reload fired right after the override) sees
-  // the CURRENT override set, not the stale closure from its last render.
-  const forceCandidateRef = useRef(forceCandidate);
-  forceCandidateRef.current = forceCandidate;
   // Live mirrors of selection + loadEvent so a detached background poll (a
   // refinement landing later, after you've navigated away) reads CURRENT
   // values, not the stale closure from when it was submitted.
@@ -197,10 +186,10 @@ export function InspectDrawer({
           await clearLoaded();
           loadedDtag.current = ev.dtag;
 
-          // Prefer the current best model (the built/refined coords, which
-          // carry the ligand) over the apo input structure. current_model is
-          // the dataset's analysis/autobuild model (or a human build) when one
-          // exists; otherwise fall back to the imported "structure" artifact.
+          // Load current_model: the APO input at ingest (ligand-free base),
+          // which then ACCUMULATES accepted ligands as you merge poses /
+          // refine (origin=built/refined). So this shows your built-up work;
+          // fall back to the imported apo "structure" artifact if unset.
           const model = ev.current_model ?? artifactOf(ev, "structure");
           if (model) {
             const mol = newMolecule(commandCentre, store);
@@ -328,14 +317,15 @@ export function InspectDrawer({
           setContour(sigma);
         }
 
-        // Overlay THIS event's autobuilt ligand pose as its own molecule — but
-        // ONLY for a candidate (not yet in the model). A merged pose is already
-        // in the crystal model we load above, so overlaying it would duplicate
-        // the ligand (the "doubled ligand" on already-built event 1). The user
-        // can override a false-positive pose_merged via forceCandidate.
-        const isCandidate =
-          ev.pose_merged !== true || forceCandidateRef.current.has(ev.id);
-        const pose = isCandidate ? artifactOf(ev, "ligand_pose") : undefined;
+        // Overlay THIS event's autobuilt candidate pose as its own molecule —
+        // only while it's NOT yet merged. pose_merged is now reliable (the apo
+        // base means nothing is pre-merged; the merge action is the only thing
+        // that sets it True), so once you merge a pose it stops overlaying and
+        // appears in the loaded model instead — no duplicate.
+        const pose =
+          ev.pose_merged !== true
+            ? artifactOf(ev, "ligand_pose")
+            : undefined;
         if (pose) {
           const pmol = newMolecule(commandCentre, store);
           await pmol.loadToCootFromURL(
@@ -1106,75 +1096,39 @@ export function InspectDrawer({
               <ToggleButton value="ambiguous">Ambiguous</ToggleButton>
             </ToggleButtonGroup>
 
-            {/* Per-event BUILD. A candidate pose (or one the user overrode as
-                "not actually merged") gets a Merge button. A pose flagged
-                merged gets an override link instead — pose_merged is a
-                centroid-match heuristic; if visual inspection shows the ligand
-                ISN'T in the model, the user can re-treat it as a candidate. */}
-            {(() => {
-              const hasPose =
-                eventPoseState(selected) !== "none" ||
-                selected.pose_merged === true;
-              const overridden = forceCandidate.has(selected.id);
-              const showMerge =
-                eventPoseState(selected) === "candidate" || overridden;
-              const showOverride =
-                selected.pose_merged === true && hasPose && !overridden;
-              return (
-                <>
-                  {showMerge && (
-                    <Tooltip
-                      arrow
-                      title={
-                        "Merge this event's autobuilt ligand into the " +
-                        "crystal model (and mark the event a hit)"
-                      }
-                    >
-                      <span>
-                        <Button
-                          size="small"
-                          variant="contained"
-                          color="info"
-                          fullWidth
-                          disabled={merging || !modelMolRef.current}
-                          onClick={() => mergePose(selected)}
-                          startIcon={
-                            merging ? (
-                              <CircularProgress size={14} />
-                            ) : (
-                              <BuildCircleIcon />
-                            )
-                          }
-                        >
-                          {merging
-                            ? "Merging…"
-                            : "Merge ligand into model"}
-                        </Button>
-                      </span>
-                    </Tooltip>
-                  )}
-                  {showOverride && (
-                    <Button
-                      size="small"
-                      variant="text"
-                      color="inherit"
-                      sx={{ textTransform: "none", opacity: 0.8 }}
-                      onClick={() => {
-                        const next = new Set(forceCandidate).add(selected.id);
-                        forceCandidateRef.current = next; // sync for reload
-                        setForceCandidate(next);
-                        // Re-load so the now-candidate pose overlays + the
-                        // Merge button appears (loadEvent reads the ref).
-                        loadedDtag.current = null;
-                        loadEvent(selected);
-                      }}
-                    >
-                      Ligand not actually in the model? Treat as candidate
-                    </Button>
-                  )}
-                </>
-              );
-            })()}
+            {/* Per-event BUILD: a candidate pose (not yet merged) gets a Merge
+                button. With the apo start-model nothing is pre-merged, so this
+                is simply "has an unmerged autobuilt pose" — no override needed
+                (pose_merged only turns true once you actually merge). */}
+            {eventPoseState(selected) === "candidate" && (
+              <Tooltip
+                arrow
+                title={
+                  "Merge this event's autobuilt ligand into the crystal " +
+                  "model (and mark the event a hit)"
+                }
+              >
+                <span>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="info"
+                    fullWidth
+                    disabled={merging || !modelMolRef.current}
+                    onClick={() => mergePose(selected)}
+                    startIcon={
+                      merging ? (
+                        <CircularProgress size={14} />
+                      ) : (
+                        <BuildCircleIcon />
+                      )
+                    }
+                  >
+                    {merging ? "Merging…" : "Merge ligand into model"}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
 
             {/* Refinement is CRYSTAL-scoped: it acts on the whole-crystal
                 current_model vs the dataset's data, not on this single event.

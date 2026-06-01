@@ -69,13 +69,11 @@ class DatasetSpec:
     events: list[EventSpec] = field(default_factory=list)
     # Dataset-level imported artifacts (structure, data, z-map, ligands).
     artifacts: list[ArtifactSpec] = field(default_factory=list)
-    # Relpath of the analysis's own merged model (PanDDA2 autobuild
-    # pandda-model.pdb): a STRUCTURE artifact carrying the built ligand, but
-    # origin=imported (re-derivable analysis output, refreshed on re-ingest;
-    # "built"/"refined" are reserved for post-ingest human/job work). When
-    # present AND no human/job model has superseded it, it becomes the
-    # dataset's current_model so the viewer shows the built ligand. None ⇒ no
-    # analysis model (33/201 in BAZ2B); current_model stays unset.
+    # Relpath of the crystal START model = the apo -pandda-input.pdb
+    # (ligand-free; an origin=imported STRUCTURE artifact). When present AND no
+    # human/job model has superseded it, it becomes the dataset's current_model
+    # — the base every event's candidate pose is merged onto. None ⇒ no apo
+    # input; current_model stays unset.
     current_model_relpath: str | None = None
     # Best-available ligand-spec slot (cif|pdb|smiles|none) — recorded so the
     # UI can be honest about whether a restraint dictionary exists. Defaults to
@@ -137,10 +135,9 @@ def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
         _apply_pointer_policy(
             ds, ds_inputs_before, ds_inputs_after, res
         )
-        # Point current_model at the analysis's own merged model (autobuild),
-        # unless a human/job model has superseded it (§1.3 — don't clobber
-        # post-ingest work).
-        _apply_analysis_model(ds, ds_spec, res)
+        # Point current_model at the apo start model, unless a human/job model
+        # has superseded it (§1.3 — don't clobber post-ingest work).
+        _apply_start_model(ds, ds_spec, res)
 
     # Project-level imported artifacts (reports): replace wholesale.
     _replace_imported_project_artifacts(project, spec)
@@ -322,15 +319,15 @@ def _apply_pointer_policy(dataset, inputs_before, inputs_after, res):
             res.n_built_preserved += 1
 
 
-def _apply_analysis_model(dataset, ds_spec, res):
-    """Point Dataset.current_model at the analysis's merged model (autobuild).
+def _apply_start_model(dataset, ds_spec, res):
+    """Point Dataset.current_model at the apo start model (-pandda-input.pdb).
 
     The model is an ``origin=imported`` STRUCTURE artifact already (re)created
     by ``_replace_imported_dataset_artifacts`` from ``ds_spec.artifacts``. We
     set it as current_model UNLESS a post-ingest human/job model
     (``origin != imported``) currently holds the pointer — that work must not
-    be clobbered (§1.3). If the dataset has no analysis model, the pointer is
-    left as-is (a prior import model was just deleted, so SET_NULL cleared it).
+    be clobbered (§1.3). If the dataset has no apo input, the pointer is left
+    as-is (a prior import model was just deleted, so SET_NULL cleared it).
     """
     relpath = ds_spec.current_model_relpath
     if not relpath:

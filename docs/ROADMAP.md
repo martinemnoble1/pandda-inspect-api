@@ -174,6 +174,18 @@ The grouped accordion drawer became a real triage surface, all client-side in
   is #4/#4b.
 
 ## Parked ideas (revisit later)
+- **Export working model back to the legacy pandda.inspect project shape**:
+  downstream workflows (Fragalysis / XChemExplorer ingestion) expect the legacy
+  pandda.inspect-ed project layout — notably the versioned per-crystal
+  `modelled_structures/<dtag>-pandda-model.pdb` (+ symlink-to-latest) and the
+  `pandda_inspect_events.csv` decision columns. Our durable state is the DB
+  (Dataset.current_model lineage + Event.decision/pose_merged), so we'd need an
+  **export adapter** that writes our working model + decisions back into that
+  on-disk shape. This is the *reverse* of the ingest import-boundary — same
+  principle (filesystem is a projection, DB is truth), so it fits cleanly:
+  a `export_pandda_inspect` command materialising current_model → the legacy
+  model path + decisions → the inspect CSVs. Needed for interop, not for the
+  core loop; scope when a downstream consumer actually requires it.
 - **RDKit "navigate by built compound" gallery**: once events are *interpreted*
   (built ligand = real entity), offer a gallery of 2D sketches as primary
   navigation. Needs an "interpreted/built" event state first. Distinguish

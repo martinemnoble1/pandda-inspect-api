@@ -23,19 +23,12 @@ NAME = "Proj"
 ROOT = "/data/proj"
 
 
-def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8,
-          model_relpath=None):
+def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8):
     """One-dataset, one-event spec; params let a re-ingest vary inputs.
 
-    ``model_relpath`` simulates a PanDDA2 autobuild merged model: it is added
-    as an imported STRUCTURE artifact and named as current_model_relpath.
+    ``struct_relpath`` is the apo input STRUCTURE, which is also the dataset's
+    current_model start (the apo start-model pivot).
     """
-    artifacts = [
-        ArtifactSpec(Artifact.Kind.STRUCTURE, struct_relpath),
-        ArtifactSpec(Artifact.Kind.DATA_MTZ, "ds1-input.mtz"),
-    ]
-    if model_relpath:
-        artifacts.append(ArtifactSpec(Artifact.Kind.STRUCTURE, model_relpath))
     return ProjectSpec(
         name=NAME,
         source_root=ROOT,
@@ -51,8 +44,11 @@ def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8,
                         event_map_relpath="ds1-event_1_map.ccp4",
                     )
                 ],
-                artifacts=artifacts,
-                current_model_relpath=model_relpath,
+                artifacts=[
+                    ArtifactSpec(Artifact.Kind.STRUCTURE, struct_relpath),
+                    ArtifactSpec(Artifact.Kind.DATA_MTZ, "ds1-input.mtz"),
+                ],
+                current_model_relpath=struct_relpath,
             )
         ],
     )
@@ -153,54 +149,31 @@ class ReIngestPreservesBuiltModelTests(TestCase):
         self.assertTrue(Artifact.objects.filter(id=self.built.id).exists())
 
 
-MODEL = "ds1-model.pdb"
+APO = "ds1-input.pdb"  # _spec's default struct_relpath = the apo start model
 
 
-class AnalysisModelPointerTests(TestCase):
-    """PanDDA2 autobuild merged model -> Dataset.current_model.
+class StartModelPointerTests(TestCase):
+    """The apo input (-pandda-input.pdb) becomes Dataset.current_model at
+    ingest; the pointer policy must not clobber a human/job model."""
 
-    origin=imported (re-derivable); must not clobber a human/job model.
-    """
-
-    def test_analysis_model_becomes_current_model(self):
-        reconcile_project(_spec(model_relpath=MODEL))
+    def test_apo_becomes_current_model(self):
+        reconcile_project(_spec())
         ds = Dataset.objects.get(dtag="ds1")
         self.assertIsNotNone(ds.current_model_id)
-        self.assertEqual(ds.current_model.relpath, MODEL)
+        self.assertEqual(ds.current_model.relpath, APO)
         self.assertEqual(ds.current_model.origin, Artifact.Origin.IMPORTED)
 
-    def test_no_model_leaves_pointer_unset(self):
-        reconcile_project(_spec(model_relpath=None))
-        ds = Dataset.objects.get(dtag="ds1")
-        self.assertIsNone(ds.current_model_id)
-
-    def test_reingest_refreshes_analysis_model(self):
-        # First ingest sets it; re-ingest re-creates the imported artifact and
-        # re-points (the old imported row is replaced, not preserved).
-        reconcile_project(_spec(model_relpath=MODEL))
-        reconcile_project(_spec(model_relpath=MODEL))
-        ds = Dataset.objects.get(dtag="ds1")
-        # Exactly one imported model at that relpath (no accumulation).
-        self.assertEqual(
-            ds.artifacts.filter(
-                relpath=MODEL, origin=Artifact.Origin.IMPORTED
-            ).count(),
-            1,
-        )
-        self.assertEqual(ds.current_model.relpath, MODEL)
-
-    def test_human_model_not_clobbered_by_analysis_model(self):
-        # A human/job model on the pointer must win over the analysis model.
-        reconcile_project(_spec(model_relpath=MODEL))
+    def test_human_model_not_clobbered_by_apo(self):
+        # A human/job built model on the pointer must survive re-ingest (the
+        # apo start-model must not overwrite post-ingest work).
+        reconcile_project(_spec())
         ds = Dataset.objects.get(dtag="ds1")
         built = Artifact.objects.create(
             dataset=ds, kind=Artifact.Kind.STRUCTURE,
-            relpath="ds1-human-build.pdb", origin=Artifact.Origin.BUILT,
+            relpath="builds/1/model.pdb", origin=Artifact.Origin.BUILT,
         )
         ds.current_model = built
         ds.save()
-        # Re-ingest: the analysis model is refreshed, but the pointer stays on
-        # the human build (don't clobber post-ingest work).
-        reconcile_project(_spec(model_relpath=MODEL))
+        reconcile_project(_spec())
         ds.refresh_from_db()
         self.assertEqual(ds.current_model_id, built.id)
