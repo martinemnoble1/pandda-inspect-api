@@ -83,9 +83,11 @@ PanDDA's public reference dataset is **BAZ2B** (Zenodo DOI
 [10.5281/zenodo.48768](https://doi.org/10.5281/zenodo.48768), CC-BY-SA — fetch
 it outside the repo; do **not** commit it). The Zenodo bundle is a *curated
 results* tree, **not** a PanDDA output directory Reinspect can read directly, so
-to get an ingestable dataset you **run PanDDA2 on it** (the xchem/PanDDA2 run on
-canonical BAZ2B works cleanly — incl. on an M1 Mac). That produces a
-`pandda2_out/` directory, which is a valid PanDDA2 output root:
+to get an ingestable dataset you **run PanDDA2 over it yourself**. PanDDA2 is a
+separate tool — [github.com/xchem/pandda_2_gemmi](https://github.com/xchem/pandda_2_gemmi)
+(install + run per that repo; out of scope here). Running it on the canonical
+BAZ2B dataset works cleanly (incl. on an M1 Mac) and produces a `pandda2_out/`
+directory, which is a valid PanDDA2 output root Reinspect ingests:
 
 ```bash
 # in the desktop app: Import → Browse folder → select  …/pandda2_out

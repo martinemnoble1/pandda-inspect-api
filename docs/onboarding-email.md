@@ -43,10 +43,11 @@ enough along to be worth a look, and I'd love your eyes on it.
 **Getting a dataset to test on.** The public reference is the **BAZ2B** dataset
 (Zenodo DOI 10.5281/zenodo.48768). One wrinkle: the Zenodo download is a curated
 *results* bundle, not a PanDDA output directory the app can read directly — so
-you generate an ingestable dataset by **running PanDDA2 on it**. A checkout of
-the latest **xchem/PanDDA2** run on the canonical BAZ2B dataset works cleanly
-(it ran beautifully on an M1 Mac for me). That produces a `pandda2_out/`
-directory, and then:
+you generate an ingestable dataset by **running PanDDA2 over it yourself**.
+PanDDA2 is a separate tool — the xchem repo at
+https://github.com/xchem/pandda_2_gemmi (install + run per its own docs). I ran
+the latest version on the canonical BAZ2B dataset and it worked beautifully
+(incl. on this M1 Mac). That produces a `pandda2_out/` directory, and then:
 
   - **In the app:** Import → **Browse folder** → select the `pandda2_out`
     folder. It's ingested *in place*, no copy.
