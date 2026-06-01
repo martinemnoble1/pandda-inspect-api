@@ -188,6 +188,19 @@ export const api = {
     if (!r.ok) throw new Error(body.detail || `${r.status} import failed`);
     return body;
   },
+  // Ingest a PanDDA output directory IN PLACE by server-side path (no copy).
+  // Desktop-only: a server path is meaningful only when the backend runs on
+  // the same machine (Electron/CLI). The endpoint itself is localhost-guarded.
+  async ingestPath(name: string, path: string) {
+    const r = await fetch(`${BASE}/projects/ingest_path/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, path }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `${r.status} ingest failed`);
+    return body;
+  },
   // --- jobs (refinement dispatch/tracking) ---
   // Is the refinement environment wired (CCP4 probe)? Gates the UI action.
   refineAvailable: () =>
