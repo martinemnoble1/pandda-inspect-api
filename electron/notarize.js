@@ -14,6 +14,8 @@
 //   APPLE_TEAM_ID                U72A26RZ2R  (Martin Noble, Developer ID team)
 "use strict";
 
+const { execFileSync } = require("node:child_process");
+
 exports.default = async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context;
   if (electronPlatformName !== "darwin") return;
@@ -27,11 +29,28 @@ exports.default = async function notarizing(context) {
     return;
   }
 
-  // Lazy-require so the dep is only needed for signed mac builds.
-  const { notarize } = require("@electron/notarize");
   const appName = context.packager.appInfo.productFilename;
   const appPath = `${appOutDir}/${appName}.app`;
 
+  // CRITICAL: this afterSign hook also fires when electron-builder DECIDED NOT
+  // to sign — most notably on pull requests, where it skips code signing by
+  // design ("Current build is a part of pull request, code signing will be
+  // skipped"). Notarizing an unsigned app errors. So verify the app is actually
+  // signed first and bail gracefully if not (PR builds, or any silent skip).
+  try {
+    execFileSync("codesign", ["--verify", "--deep", "--strict", appPath], {
+      stdio: "ignore",
+    });
+  } catch {
+    console.log(
+      "[notarize] app is not validly signed (PR build or signing skipped) " +
+        "— skipping notarization. The unsigned app is still produced."
+    );
+    return;
+  }
+
+  // Lazy-require so the dep is only needed for signed mac builds.
+  const { notarize } = require("@electron/notarize");
   console.log(`[notarize] submitting ${appName}.app to Apple notary service…`);
   await notarize({
     appPath,
