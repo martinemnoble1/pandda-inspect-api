@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the macOS app. Notarization REQUIRES
+  hardened runtime, and our app embeds a PyInstaller-frozen Python backend
+  (resources/backend/pandda-inspect-backend) — that binary unpacks and runs
+  code at runtime, which a default hardened runtime kills. The two
+  allow-* memory entitlements below are what let the frozen interpreter +
+  the compiled gemmi extension load without being SIGKILLed by the runtime.
+
+  These are the standard, minimal set Electron + an embedded interpreter need.
+  We do NOT grant network-server / file-access entitlements here because the
+  app sandbox is not enabled (Developer ID distribution, not the App Store);
+  the backend binds 127.0.0.1 freely as a normal user process.
+-->
+<plist version="1.0">
+  <dict>
+    <!-- Electron itself needs these for its JIT (V8). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- PyInstaller onefile extracts + dlopens the frozen libs at launch;
+         without disabling library validation the embedded .so (gemmi,
+         Python) fails to load under hardened runtime. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Some Python/ctypes paths use DYLD_* env at spawn time. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+  </dict>
+</plist>

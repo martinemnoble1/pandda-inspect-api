@@ -1,0 +1,56 @@
+{
+  "name": "pandda-inspect",
+  "productName": "Reinspect",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reinspect — an independent prototype client for reviewing PanDDA events (spawns the frozen Django backend, loads the Moorhen client). Not affiliated with the PanDDA project.",
+  "author": "pandda-inspect contributors",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^2.3.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "org.pandda.inspect",
+    "productName": "Reinspect",
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/pandda-inspect-backend",
+        "to": "backend/pandda-inspect-backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "afterSign": "electron/notarize.js",
+    "artifactName": "Reinspect-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.education",
+      "target": ["dmg", "zip"],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist",
+      "notarize": false
+    },
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "linux": {
+      "category": "Science",
+      "target": ["AppImage", "deb"]
+    }
+  }
+}

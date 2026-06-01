@@ -57,6 +57,65 @@ def detect_flavour(extracted: Path) -> str:
     )
 
 
+def _is_pandda2_root(root: Path) -> bool:
+    """PanDDA2 out_dir = analyses/pandda_analyse_events.csv present."""
+    return (root / "analyses" / "pandda_analyse_events.csv").is_file()
+
+
+def detect_pandda_flavour(root: Path) -> str:
+    """Classify a PanDDA *output directory* (already on disk, not a zip).
+
+    Returns ``"pandda2"`` (the CSV-based format) or ``"pandda1"`` (the
+    ``pandda/results.json`` format). Raises if neither marker is present —
+    so a mistaken folder pick fails loudly rather than ingesting nothing.
+    """
+    if _is_pandda2_root(root):
+        return "pandda2"
+    if (root / "pandda" / "results.json").is_file() or (
+        root / "results.json"
+    ).is_file():
+        return "pandda1"
+    raise ImportError_(
+        f"{root} is not a PanDDA output directory: expected "
+        "analyses/pandda_analyse_events.csv (PanDDA2) or "
+        "pandda/results.json (PanDDA1)."
+    )
+
+
+def ingest_path(source_dir: Path, project_name: str) -> dict:
+    """Ingest a PanDDA output directory **in place** (no copy).
+
+    Unlike :func:`import_zip`, this points the project's ``source_root`` at
+    ``source_dir`` exactly where it already lives — the affordance the spec
+    calls out as Electron/CLI-only (a browser sandbox can never hand the
+    server a directory path). Artifact serving resolves relpaths against
+    ``source_root`` (storage.LocalFileStore), so nothing is duplicated.
+
+    The caller is responsible for the trust boundary: this runs ingest against
+    an arbitrary server-side path, so the HTTP entry point MUST be restricted
+    to localhost (the Electron/CLI binding) — see views.ingest_path_.
+    """
+    root = Path(source_dir).expanduser().resolve()
+    if not root.is_dir():
+        raise ImportError_(f"Not a directory: {root}")
+    if Project.objects.filter(name=project_name).exists():
+        raise ImportError_(f"Project '{project_name}' already exists.")
+
+    flavour = detect_pandda_flavour(root)
+    command = "ingest_pandda2" if flavour == "pandda2" else "ingest_pandda"
+    # Both readers set Project.source_root = root (in place); reconcile owns
+    # persistence. No shutil.copytree — that's the whole point.
+    call_command(command, project=project_name, root=str(root))
+    project = Project.objects.get(name=project_name)
+    return {
+        "flavour": flavour,
+        "project": project_name,
+        "source_root": str(root),
+        "n_datasets": project.datasets.count(),
+        "copied": False,
+    }
+
+
 def import_zip(zip_path: Path, project_name: str) -> dict:
     """Extract, detect flavour, land under PANDDA_DATA_ROOT, ingest. Returns a
     summary dict."""

@@ -8,3 +8,7 @@ db.sqlite3
 build/
 dist/
 *.spec.bak
+
+# Electron shell build output + deps (installers are built in CI).
+node_modules/
+release/

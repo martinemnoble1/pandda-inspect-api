@@ -11,7 +11,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .buildservice import BuildError, land_built_model
-from .importer import ImportError_, import_zip
+from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
 from .models import Artifact, Dataset, Event, Job, Project, Shell
@@ -24,6 +24,21 @@ from .serializers import (
     ProjectSerializer,
     ShellSerializer,
 )
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_local_request(request) -> bool:
+    """True iff the request originates from the loopback interface.
+
+    The path-ingest endpoint runs ingest against an arbitrary *server-side*
+    directory, so it is only safe for the local desktop/CLI binding (which
+    spawns the backend on 127.0.0.1). ``REMOTE_ADDR`` is the immediate peer;
+    there is no reverse proxy in the Electron/dev binding, so it is the real
+    client. (A hosted deployment behind a proxy would set X-Forwarded-For —
+    we deliberately do NOT trust that here; loopback REMOTE_ADDR only.)
+    """
+    return request.META.get("REMOTE_ADDR") in _LOOPBACK
 
 
 class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
@@ -81,6 +96,61 @@ class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({"detail": str(exc)}, status=400)
         finally:
             tmp_path.unlink(missing_ok=True)
+        return Response(summary, status=201)
+
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to a PanDDA output "
+                        "directory ON THE SERVER. Ingested in place "
+                        "(source_root), not copied.",
+                    },
+                },
+                "required": ["name", "path"],
+            }
+        },
+        responses={
+            201: OpenApiResponse(description="Ingested in place (no copy)."),
+            403: OpenApiResponse(
+                description="Path ingest is restricted to localhost callers."
+            ),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="ingest_path")
+    def ingest_path_(self, request):
+        """Ingest a PanDDA output directory **in place** by server-side path.
+
+        This is the "ingest without copy" affordance: the desktop (Electron)
+        or CLI binding hands the server a real directory path; the project's
+        ``source_root`` points at it where it already lives. A browser can
+        never reach this usefully (its file picker yields no path) — and it
+        runs ingest against an arbitrary server path, so we **restrict it to
+        localhost callers** (the Electron app and the dev machine spawn the
+        backend on 127.0.0.1). Remote/hosted deployments use the zip importer.
+        """
+        if not _is_local_request(request):
+            return Response(
+                {
+                    "detail": "Path ingest is only available to local "
+                    "(desktop/CLI) clients. Use the zip import instead."
+                },
+                status=403,
+            )
+        name = request.data.get("name")
+        path = request.data.get("path")
+        if not name or not path:
+            return Response(
+                {"detail": "Both 'name' and 'path' are required."}, status=400
+            )
+        try:
+            summary = ingest_path(Path(path), name)
+        except ImportError_ as exc:
+            return Response({"detail": str(exc)}, status=400)
         return Response(summary, status=201)
 
 

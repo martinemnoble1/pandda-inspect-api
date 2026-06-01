@@ -41,6 +41,15 @@ datas += [
     (os.path.join(ROOT, "inspect_api"), "inspect_api"),
 ]
 
+# Ship the built client (server_main serves it at / so the Electron window and
+# the API are same-origin + cross-origin-isolated). Collected as `client_dist`
+# under the bundle root; absent if `npm run build` wasn't run before freezing —
+# the freeze still succeeds, the backend just serves /api only. CI builds the
+# client before PyInstaller, so shipped installers always include it.
+_client_dist = os.path.join(ROOT, "client", "dist")
+if os.path.isdir(_client_dist):
+    datas += [(_client_dist, "client_dist")]
+
 a = Analysis(
     [os.path.join(ROOT, "packaging", "server_main.py")],
     pathex=[ROOT],

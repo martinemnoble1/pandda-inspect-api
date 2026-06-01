@@ -6,7 +6,7 @@ export function Landing() {
     <Container maxWidth="md">
       <Box sx={{ mt: 6, textAlign: "center" }}>
         <Typography variant="h3" gutterBottom>
-          PanDDA Inspect
+          Reinspect
         </Typography>
         <Typography variant="h6" color="text.secondary" paragraph>
           Browse PanDDA analyses, triage events, and inspect electron density
@@ -16,6 +16,15 @@ export function Landing() {
           A contract-first reference client. The filesystem is an import
           boundary; everything you see here is served from a transactional
           store through a versioned API.
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mt: 2 }}
+        >
+          An independent prototype reimagining the pandda.inspect event-review
+          workflow. Not affiliated with or endorsed by the PanDDA project.
         </Typography>
         <Stack
           direction="row"

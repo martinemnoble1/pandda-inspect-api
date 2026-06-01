@@ -10,6 +10,7 @@ import { ImportPage } from "./pages/ImportPage";
 import { ProjectBrowser } from "./pages/ProjectBrowser";
 import { ProjectDashboard } from "./pages/ProjectDashboard";
 import { InspectPage } from "./pages/InspectPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 const router = createBrowserRouter([
   {
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
       { path: "/import", element: <ImportPage /> },
       { path: "/projects", element: <ProjectBrowser /> },
       { path: "/projects/:projectId", element: <ProjectDashboard /> },
+      { path: "/settings", element: <SettingsPage /> },
     ],
   },
   // Inspect is full-bleed (no chrome) so Moorhen fills the viewport.

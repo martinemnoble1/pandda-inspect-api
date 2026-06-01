@@ -1,5 +1,6 @@
 import { AppBar, Box, Button, Toolbar, Typography } from "@mui/material";
 import { Link, Outlet } from "react-router-dom";
+import { isDesktop } from "../desktop";
 
 export function Layout() {
   return (
@@ -12,7 +13,7 @@ export function Layout() {
             to="/"
             sx={{ flexGrow: 1, color: "inherit", textDecoration: "none" }}
           >
-            PanDDA Inspect
+            Reinspect
           </Typography>
           <Button color="inherit" component={Link} to="/projects">
             Projects
@@ -20,6 +21,11 @@ export function Layout() {
           <Button color="inherit" component={Link} to="/import">
             Import
           </Button>
+          {isDesktop() && (
+            <Button color="inherit" component={Link} to="/settings">
+              Settings
+            </Button>
+          )}
         </Toolbar>
       </AppBar>
       <Box component="main" sx={{ flex: 1, p: 3 }}>

@@ -12,9 +12,78 @@ Run frozen: ``./server`` (PyInstaller onefile), or from source
 PANDDA_DB_DIR (where the SQLite file + data live; default a per-user
 app-data dir — NOT inside the read-only frozen bundle).
 """
+import mimetypes
 import os
 import sys
 from pathlib import Path
+
+# Cross-origin isolation headers. Moorhen's WASM needs SharedArrayBuffer, which
+# the browser only grants to a cross-origin-isolated context. Served same-origin
+# with the API, these headers make the whole app (client + /api) isolated.
+_COOP_COEP = [
+    ("Cross-Origin-Opener-Policy", "same-origin"),
+    ("Cross-Origin-Embedder-Policy", "require-corp"),
+    # COEP:require-corp means same-origin subresources need this too; setting it
+    # broadly keeps WASM/worker/asset loads from being blocked.
+    ("Cross-Origin-Resource-Policy", "same-origin"),
+]
+
+
+def _client_dist() -> "Path | None":
+    """Locate the built client (``client/dist``), frozen or from source.
+
+    Frozen: collected at ``<_MEIPASS>/client_dist`` (see backend.spec). From
+    source: ``<repo>/client/dist`` if it has been built. Returns None if the
+    client was never built (backend still serves /api; the window just 404s).
+    """
+    if getattr(sys, "frozen", False):
+        cand = Path(sys._MEIPASS) / "client_dist"  # type: ignore[attr-defined]
+    else:
+        cand = Path(__file__).resolve().parent.parent / "client" / "dist"
+    return cand if (cand / "index.html").is_file() else None
+
+
+class _SpaStaticApp:
+    """Serve the built SPA at ``/`` and delegate ``/api`` to Django.
+
+    A deliberately tiny WSGI shim (no whitenoise dependency — keeps the freeze
+    lean and the gotcha surface small). Adds COOP/COEP to every response so the
+    client is cross-origin-isolated. Unknown non-/api paths fall back to
+    ``index.html`` (client-side routing via react-router).
+    """
+
+    def __init__(self, django_app, dist: Path) -> None:
+        self._django = django_app
+        self._dist = dist.resolve()
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "/")
+        if path.startswith("/api/") or path == "/api":
+            return self._wrap_django(environ, start_response)
+        return self._serve_static(path, start_response)
+
+    def _wrap_django(self, environ, start_response):
+        def _start(status, headers, exc_info=None):
+            return start_response(status, headers + _COOP_COEP, exc_info)
+
+        return self._django(environ, _start)
+
+    def _serve_static(self, path, start_response):
+        rel = path.lstrip("/") or "index.html"
+        target = (self._dist / rel).resolve()
+        # Path traversal guard + SPA fallback for unknown routes.
+        if (
+            self._dist not in target.parents and target != self._dist
+        ) or not target.is_file():
+            target = self._dist / "index.html"
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        body = target.read_bytes()
+        headers = [
+            ("Content-Type", ctype),
+            ("Content-Length", str(len(body))),
+        ] + _COOP_COEP
+        start_response("200 OK", headers)
+        return [body]
 
 
 def _bootstrap_paths() -> None:
@@ -89,15 +158,28 @@ def main() -> int:
 
     from config.wsgi import application
 
+    # Serve the built client same-origin with the API (so its relative
+    # /api/v1 calls work and the whole context is cross-origin-isolated for
+    # Moorhen's SharedArrayBuffer). If the client was never built, fall back
+    # to the bare Django app (the Electron window will just 404 at /).
+    mimetypes.add_type("application/wasm", ".wasm")
+    dist = _client_dist()
+    if dist is not None:
+        app = _SpaStaticApp(application, dist)
+        client_note = f"client: {dist}"
+    else:
+        app = application
+        client_note = "client: NOT BUILT (serving /api only)"
+
     port = int(os.environ.get("PANDDA_PORT", "8000"))
     from waitress import serve
 
     sys.stderr.write(
         f"[pandda-inspect] backend up on http://127.0.0.1:{port}  "
-        f"(data: {data_dir})\n"
+        f"(data: {data_dir}; {client_note})\n"
     )
     sys.stderr.flush()
-    serve(application, host="127.0.0.1", port=port, threads=8)
+    serve(app, host="127.0.0.1", port=port, threads=8)
     return 0
 
 

@@ -4,7 +4,9 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   Container,
+  Divider,
   LinearProgress,
   Paper,
   Stack,
@@ -12,21 +14,39 @@ import {
   Typography,
 } from "@mui/material";
 import { api } from "../api";
+import { desktop } from "../desktop";
 
 export function ImportPage() {
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [folder, setFolder] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const navigate = useNavigate();
+  const desk = desktop();
+
+  // Desktop only: pick a PanDDA output directory to ingest IN PLACE (no copy).
+  const pickFolder = async () => {
+    if (!desk) return;
+    const picked = await desk.pickDirectory({
+      title: "Select a PanDDA output directory",
+      buttonLabel: "Use folder",
+    });
+    if (picked) {
+      setFolder(picked);
+      setFile(null); // folder + zip are mutually exclusive inputs
+    }
+  };
 
   const submit = async () => {
-    if (!name || !file) return;
+    if (!name || (!file && !folder)) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await api.importZip(name, file);
+      const r = folder
+        ? await api.ingestPath(name, folder)
+        : await api.importZip(name, file!);
       setResult(r);
     } catch (e) {
       setError(String(e));
@@ -45,6 +65,14 @@ export function ImportPage() {
         flavour containing <code>pandda/results.json</code>) or a{" "}
         <strong>crystals directory with a manifest</strong>. The server detects
         the flavour, lands it, and ingests it into the store.
+        {desk && (
+          <>
+            {" "}
+            In the desktop app you can also{" "}
+            <strong>ingest a folder in place</strong> — pointed at where it
+            already lives, with no copy.
+          </>
+        )}
       </Typography>
 
       <Paper sx={{ p: 3 }}>
@@ -56,20 +84,56 @@ export function ImportPage() {
             fullWidth
             disabled={busy}
           />
-          <Button variant="outlined" component="label" disabled={busy}>
+
+          {/* Desktop: ingest-in-place by folder (no copy). */}
+          {desk && (
+            <>
+              <Button
+                variant="outlined"
+                onClick={pickFolder}
+                disabled={busy}
+              >
+                {folder ? "Change folder…" : "Browse folder (ingest in place)…"}
+              </Button>
+              {folder && (
+                <Chip
+                  label={folder}
+                  onDelete={busy ? undefined : () => setFolder(null)}
+                  sx={{
+                    maxWidth: "100%",
+                    "& .MuiChip-label": {
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
+              )}
+              <Divider>or upload a zip</Divider>
+            </>
+          )}
+
+          <Button
+            variant="outlined"
+            component="label"
+            disabled={busy || !!folder}
+          >
             {file ? file.name : "Choose .zip file"}
             <input
               type="file"
               accept=".zip"
               hidden
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setFolder(null);
+              }}
             />
           </Button>
+
           {busy && (
             <Box>
               <LinearProgress />
               <Typography variant="caption" color="text.secondary">
-                Uploading and ingesting…
+                {folder ? "Ingesting in place…" : "Uploading and ingesting…"}
               </Typography>
             </Box>
           )}
@@ -77,7 +141,8 @@ export function ImportPage() {
           {result && (
             <Alert severity="success">
               Imported <strong>{result.project}</strong> ({result.flavour},{" "}
-              {result.n_datasets} datasets).
+              {result.n_datasets} datasets
+              {result.copied === false ? ", in place" : ""}).
               <Button
                 size="small"
                 sx={{ ml: 2 }}
@@ -90,7 +155,7 @@ export function ImportPage() {
           <Button
             variant="contained"
             onClick={submit}
-            disabled={busy || !name || !file}
+            disabled={busy || !name || (!file && !folder)}
           >
             Import
           </Button>
