@@ -35,6 +35,11 @@ jobs:
           - os: windows-latest
           - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
+    # Hoist the signing secret to a job-level env so step `if:` can test it
+    # (step conditions can read `env.` but NOT `secrets.` directly). Empty when
+    # the secret is unset (forks/PRs) -> the unsigned path runs.
+    env:
+      HAS_SIGNING: ${{ secrets.CSC_LINK != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -78,14 +83,13 @@ jobs:
       - name: Install electron deps
         run: npm ci
 
-      # macOS build carries the signing/notarization env. The signing creds are
-      # OPTIONAL: when the repo secrets are unset (forks/PRs), electron-builder
-      # produces an UNSIGNED app, and electron/notarize.js no-ops. When they are
-      # set on a trusted build, the app is signed (CSC_LINK = base64 .p12,
-      # CSC_KEY_PASSWORD its password) and notarized (APPLE_* creds).
-      # See packaging/README.md.
-      - name: Build installers — macOS
-        if: runner.os == 'macOS'
+      # macOS — SIGNED build (only when the signing secret exists). An *empty*
+      # CSC_LINK (an unset secret expands to "") makes electron-builder treat it
+      # as a cert path and fail with "… not a file"; gating on the secret being
+      # non-empty avoids that and signs + notarizes (electron/notarize.js runs
+      # when APPLE_* are present). See packaging/README.md.
+      - name: Build installers — macOS (signed)
+        if: runner.os == 'macOS' && env.HAS_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -93,6 +97,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --publish never
+
+      # macOS — UNSIGNED fallback (forks/PRs with no secrets). No CSC_* env at
+      # all, so there's no empty cert path to choke on; produces the
+      # right-click-Open artifact.
+      - name: Build installers — macOS (unsigned)
+        if: runner.os == 'macOS' && env.HAS_SIGNING != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --publish never
 
       # Windows/Linux build deliberately carries NO CSC_* env. An *empty* CSC_LINK

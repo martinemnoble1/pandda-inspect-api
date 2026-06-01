@@ -12,3 +12,12 @@ dist/
 # Electron shell build output + deps (installers are built in CI).
 node_modules/
 release/
+
+# Signing material — NEVER commit. Certs/keys live outside the repo (or as
+# encrypted GitHub secrets); this is belt-and-braces if one lands here.
+*.p12
+*.pfx
+*.cer
+*.pem
+*.key
+*.mobileprovision
