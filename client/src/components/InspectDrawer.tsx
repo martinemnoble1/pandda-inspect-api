@@ -745,16 +745,17 @@ export function InspectDrawer({
   useEffect(() => {
     if (groups.length === 0) return;
     const sig = groups.map((g) => g.key).join("|");
-    const single = groups.length === 1;
-    // Re-open on a genuinely new list (filter/search changed it), or on first
-    // arrival when nothing is open yet.
-    setExpanded((cur) => {
-      const listChanged = autoOpenSig.current !== sig;
-      if (single && listChanged) return groups[0].key;
-      if (cur === false && listChanged) return groups[0].key;
-      return cur;
-    });
+    // Only act when the LIST itself changed (first arrival, or a filter/search
+    // that produced a different set) — not on every render, so a deliberate
+    // collapse isn't undone. Guard + record synchronously (NOT inside the
+    // setState updater) so Strict Mode's double-invoke can't defeat it.
+    if (autoOpenSig.current === sig) return;
     autoOpenSig.current = sig;
+    const single = groups.length === 1;
+    // Open the sole group, or the first group when nothing is open yet.
+    setExpanded((cur) =>
+      single || cur === false ? groups[0].key : cur
+    );
   }, [groups]);
 
   // Keep the accordion in step with the live event: open the group the
