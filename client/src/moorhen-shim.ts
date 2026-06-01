@@ -67,6 +67,14 @@ export interface MoorhenMapLike {
   // InspectDrawer.loadEvent.
   isEM: boolean;
   isOriginLocked: boolean;
+  // Map centre in Moorhen's NEGATED look-at convention, populated lazily by
+  // fetchMapCentre() (Coot get_map_molecule_centre). A freshly-loaded CCP4 map
+  // has this null — and MapScrollWheelListener, which mounts ONLY for the active
+  // map, reads mapCentre[0] unconditionally on render. So fetchMapCentre() MUST
+  // resolve a non-null centre BEFORE setActiveMap, or the render tree crashes
+  // ("null is not an object"). See InspectDrawer's activation block + fb17bf4.
+  mapCentre: [number, number, number] | null;
+  fetchMapCentre(): Promise<[number, number, number] | null>;
   // PanDDA1 event data is an MTZ (needs FEVENT/PHEVENT column labels).
   loadToCootFromMtzURL(
     url: string,

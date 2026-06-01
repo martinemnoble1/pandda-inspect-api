@@ -22,7 +22,6 @@ export function ImportPage() {
   const [folder, setFolder] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
   const navigate = useNavigate();
   const desk = desktop();
 
@@ -47,7 +46,13 @@ export function ImportPage() {
       const r = folder
         ? await api.ingestPath(name, folder)
         : await api.importZip(name, file!);
-      setResult(r);
+      // Land straight on the new project's summary. Fall back to the project
+      // list only if the importer didn't return an id (older backend).
+      if (r?.id != null) {
+        navigate(`/projects/${r.id}`);
+      } else {
+        navigate("/projects");
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -61,16 +66,20 @@ export function ImportPage() {
         Import a dataset
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Upload a zip of either a <strong>PanDDA output directory</strong> (the
-        flavour containing <code>pandda/results.json</code>) or a{" "}
-        <strong>crystals directory with a manifest</strong>. The server detects
-        the flavour, lands it, and ingests it into the store.
+        Point at a <strong>PanDDA output directory</strong> — the server
+        detects the flavour from the files inside it:{" "}
+        <strong>PanDDA&nbsp;2</strong> (containing{" "}
+        <code>analyses/pandda_analyse_events.csv</code>) or{" "}
+        <strong>PanDDA&nbsp;1</strong> (containing{" "}
+        <code>pandda/results.json</code>). A{" "}
+        <strong>crystals directory with a manifest</strong> works too. The
+        server lands it and ingests it into the store.
         {desk && (
           <>
             {" "}
-            In the desktop app you can also{" "}
-            <strong>ingest a folder in place</strong> — pointed at where it
-            already lives, with no copy.
+            In the desktop app you can <strong>ingest a folder in place</strong>{" "}
+            — pointed at where it already lives, with no copy. Otherwise upload a
+            zip of the directory.
           </>
         )}
       </Typography>
@@ -138,20 +147,6 @@ export function ImportPage() {
             </Box>
           )}
           {error && <Alert severity="error">{error}</Alert>}
-          {result && (
-            <Alert severity="success">
-              Imported <strong>{result.project}</strong> ({result.flavour},{" "}
-              {result.n_datasets} datasets
-              {result.copied === false ? ", in place" : ""}).
-              <Button
-                size="small"
-                sx={{ ml: 2 }}
-                onClick={() => navigate("/projects")}
-              >
-                View projects
-              </Button>
-            </Alert>
-          )}
           <Button
             variant="contained"
             onClick={submit}

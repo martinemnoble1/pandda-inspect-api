@@ -79,6 +79,9 @@ class IngestPathTests(TestCase):
                 Path(project.source_root).resolve(), root.resolve()
             )
             self.assertEqual(body["n_datasets"], 1)
+            # The id is returned so the client can land on the new project's
+            # summary (/projects/<id>) straight after import.
+            self.assertEqual(body["id"], project.id)
 
     def test_non_pandda_dir_400s(self):
         root = Path(self._tmp())  # empty dir, no markers
