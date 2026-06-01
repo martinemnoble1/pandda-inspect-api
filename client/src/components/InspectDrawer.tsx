@@ -329,16 +329,37 @@ export function InspectDrawer({
           // varies by dataset/event, so the user can retune via the slider
           // (which gives event maps headroom up to EVENT_SIGMA_MAX).
           // Prefer this event's autobuild-tuned contour (events.yaml "Optimal
-          // Contour", in σ) when present — the level the fitted ligand reads
-          // best at — else the generic BDC default. The slider still retunes.
-          const sigma =
-            ev.optimal_contour != null && ev.optimal_contour > 0
-              ? ev.optimal_contour
-              : DEFAULT_EVENT_SIGMA;
-          const level =
+          // Contour") when present — the level the fitted ligand reads best at
+          // — else the generic BDC default.
+          //
+          // UNITS (verified against pandda2 source + Moorhen source):
+          //  • "Optimal Contour" is in ABSOLUTE map units. pandda2 computes it
+          //    as a threshold on raw BDC-corrected event-map sample values
+          //    (autobuild/inbuilt.py get_optimal_signal_contour), NOT in σ.
+          //    Its range here is ~0.18–9 (median ~1.2), tracking each map's
+          //    absolute density scale — exactly what you'd expect of absolutes,
+          //    not σ-multiples.
+          //  • Moorhen's stored contourLevel is ALSO absolute: MoorhenMapManager
+          //    seeds it as `nσ * mapRmsd`, and the map card slider shows
+          //    `level/mapRmsd` as σ and writes back `σ * mapRmsd`.
+          // So: pass optimal_contour straight through (already absolute); only
+          // the σ-based DEFAULT needs `* mapRmsd`. The previous code multiplied
+          // the absolute optimal_contour by rmsd too, collapsing it to a tiny
+          // arbitrary level — the "looks wrong" bug.
+          const rmsd =
             typeof map.mapRmsd === "number" && map.mapRmsd > 0
-              ? sigma * map.mapRmsd
-              : map.contourLevel ?? 1.0;
+              ? map.mapRmsd
+              : 1.0;
+          const hasOptimal =
+            ev.optimal_contour != null && ev.optimal_contour > 0;
+          // ``level`` is absolute (what Coot wants); ``sigma`` is the σ-domain
+          // value the slider edits (converts back via rmsd in onContour).
+          const level = hasOptimal
+            ? (ev.optimal_contour as number)
+            : DEFAULT_EVENT_SIGMA * rmsd;
+          const sigma = hasOptimal
+            ? (ev.optimal_contour as number) / rmsd
+            : DEFAULT_EVENT_SIGMA;
           dispatch(addMap(map as any));
           // NB: deliberately NOT setActiveMap here. Making this the active map
           // mounts Moorhen's MapScrollWheelListener (MoorhenMapManager gates it

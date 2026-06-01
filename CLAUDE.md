@@ -49,7 +49,14 @@ PanDDA2 ingest facts that bit us (all real, from a BAZ2B run):
   coords; the model of record is the per-crystal `Dataset.current_model`) and
   lift the three scores onto `Event.{build_score,rscc,optimal_contour}`. The
   frontend seeds the contour slider from `optimal_contour` and badges built
-  event-chips.
+  event-chips. **UNITS GOTCHA:** `Optimal Contour` is in **ABSOLUTE** map units,
+  NOT σ — pandda2 computes it as a threshold on raw BDC-corrected event-map
+  sample values (`autobuild/inbuilt.py get_optimal_signal_contour`); BAZ2B range
+  ~0.18–9, median ~1.2. Moorhen's stored `contourLevel` is also absolute (it
+  seeds `nσ * mapRmsd`; the map-card slider shows `level/mapRmsd` as σ). So pass
+  `optimal_contour` to `setContourLevel` **directly** (do NOT `* mapRmsd`); only
+  σ-based defaults get `* mapRmsd`. Our own σ-domain slider stores
+  `optimal_contour / mapRmsd` so its σ readout/retune stays consistent.
 - **Crystal START model = the apo `-pandda-input.pdb`** (ligand-free), set as
   `Dataset.current_model` at ingest — NOT the merged `pandda-model.pdb`. Every
   event is then a *candidate* pose merged onto apo; merges accumulate
