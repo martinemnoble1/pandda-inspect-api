@@ -125,8 +125,12 @@ typed wrappers in `client/src/moorhen-shim.ts`:
 - **Default level:** event maps are **BDC-corrected** (bound-state density
   restored toward full occupancy) → viewed like a normal 2Fo-Fc map (single
   positive contour, `isDifference=false`), NOT an Fo-Fc difference map at ±3σ.
-  Default `DEFAULT_EVENT_SIGMA = 2.0` (BDC inflates contrast; 1σ is too bulky).
-  Ideal level is dataset/event-dependent — the slider retunes.
+  Default `DEFAULT_EVENT_SIGMA = 5.0` (BDC inflates the σ scale sharply, so low
+  σ drowns in bulk and the event reads best up around 5σ). Ideal level is
+  dataset/event-dependent — the slider retunes, and the per-event events.yaml
+  "Optimal Contour" overrides the default when present. The contour slider's
+  range is role-dependent: event maps get headroom to `EVENT_SIGMA_MAX` (12σ),
+  model 2mFo-DFc to `MAP_SIGMA_MAX` (5σ), mFo-DFc to `DIFF_SIGMA_MAX` (8σ).
 - Load order: **recentre BEFORE loading the map** so its first contour lands on
   the event.
 

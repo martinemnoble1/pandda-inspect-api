@@ -81,11 +81,17 @@ interface Props {
   cootInitialized: boolean;
 }
 
-// Default contour level (in σ) for PanDDA event maps. BDC correction inflates
-// the bound-state density, so ~2σ isolates the binding event where 1σ shows too
-// much bulk. The ideal level is dataset/event-dependent — this is just the
-// starting point; the slider lets the user retune.
-const DEFAULT_EVENT_SIGMA = 2.0;
+// Default contour level (in σ) for PanDDA event maps. BDC correction restores
+// the bound-state density toward full occupancy, which sharply inflates the σ
+// scale — empirically the binding event reads best around ~5σ, with low σ
+// drowning in bulk. The ideal level is dataset/event-dependent (the slider
+// retunes, and per-event events.yaml "Optimal Contour" overrides when present).
+const DEFAULT_EVENT_SIGMA = 5.0;
+// Upper end of the contour slider (σ). Event maps run hot post-BDC, so they get
+// generous headroom above the ~5σ default; model maps need far less.
+const EVENT_SIGMA_MAX = 12;
+const MAP_SIGMA_MAX = 5;
+const DIFF_SIGMA_MAX = 8;
 // Default contour (σ) for a 2mFo-DFc direct map and an mFo-DFc difference map.
 const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
@@ -99,6 +105,10 @@ interface LoadedMap {
   label: string;
   sigma: number; // current contour in σ
   isDifference: boolean;
+  // Event maps (BDC-corrected) run hot and get a wider slider range than the
+  // model-based 2mFo-DFc map, which is also non-difference. Distinguishes the
+  // two cases that share isDifference=false.
+  isEvent: boolean;
   visible: boolean;
 }
 
@@ -313,11 +323,11 @@ export function InspectDrawer({
           // PanDDA event maps are BDC-corrected: the bound-state ligand density
           // is restored toward full occupancy, so they are viewed like a normal
           // 2Fo-Fc map (single positive contour) — NOT like an Fo-Fc difference
-          // map at ±3σ. Hence isDifference stays false. Default 2σ: BDC
-          // correction inflates contrast, so 1σ shows too much bulk; ~2σ
-          // isolates the binding-event density (matches pandda.inspect practice
-          // for this BAZ2B data). The right level varies by dataset/event, so
-          // the user can retune via the slider.
+          // map at ±3σ. Hence isDifference stays false. Default ~5σ: BDC
+          // correction inflates the σ scale sharply, so low σ drowns in bulk and
+          // the binding-event density reads best up around 5σ. The right level
+          // varies by dataset/event, so the user can retune via the slider
+          // (which gives event maps headroom up to EVENT_SIGMA_MAX).
           // Prefer this event's autobuild-tuned contour (events.yaml "Optimal
           // Contour", in σ) when present — the level the fitted ligand reads
           // best at — else the generic BDC default. The slider still retunes.
@@ -347,6 +357,7 @@ export function InspectDrawer({
             label: "Event",
             sigma,
             isDifference: false,
+            isEvent: true,
             visible: true,
           });
         }
@@ -383,6 +394,7 @@ export function InspectDrawer({
               label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
               sigma: msigma,
               isDifference: col.isDifference,
+              isEvent: false,
               visible: true,
             });
           }
@@ -1245,7 +1257,13 @@ export function InspectDrawer({
                   <Slider
                     size="small"
                     min={0}
-                    max={m.isDifference ? 8 : 5}
+                    max={
+                      m.isEvent
+                        ? EVENT_SIGMA_MAX
+                        : m.isDifference
+                        ? DIFF_SIGMA_MAX
+                        : MAP_SIGMA_MAX
+                    }
                     step={0.05}
                     value={m.sigma}
                     disabled={!m.visible}
