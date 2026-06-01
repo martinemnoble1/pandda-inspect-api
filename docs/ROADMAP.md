@@ -7,32 +7,42 @@ and [client/PANDDA2_INTEGRATION.md](../client/PANDDA2_INTEGRATION.md)
 (Moorhen/PanDDA2 client specifics). This file is the single place for *what's
 next and in what order*.
 
-Last updated: 2026-05-31 (main @ `e330b6c`).
+Last updated: 2026-06-01 (main @ `9769842`; reconciled against the codebase by
+audit — the build+refine loop and the Electron app shipped since the prior
+update, so several items below moved DESIGNED/PACKAGING → DONE).
 
 ## Where we are (snapshot)
 
-- **MVP works end to end**: Django+DRF backend (Project/Dataset/Event/Artifact/
-  Shell) + React/Moorhen client (landing, import, project browser, dashboard
-  with report iframes, Moorhen inspect view with grouped accordion drawer,
-  contour control, decision PATCH). Public repo, clean history.
-- **Inspect-drawer triage & navigation UX — DONE this session** (see new §7):
-  dataset-header chips (#events / built / #hits / quality = best 1−BDC), a Sort
-  dropdown, a 3-state Active/With-events/All filter (Active hides all-`no_hit`
-  datasets), prev/next nav across dataset boundaries with the accordion
-  following the live event, and autobuild-backed event chips visually
-  differentiated.
-- **Per-event autobuild ingested — DONE this session**: `ingest_pandda2` now
-  parses each event's `events.yaml` `Build:` block into an event-scoped
-  `LIGAND_POSE` artifact + `build_score`/`rscc`/`optimal_contour` on the Event
-  (migration 0007; covered by `test_event_autobuild.py`). The contour slider
-  seeds from `optimal_contour`. **Model-of-record decision settled** (CLAUDE.md
-  + the per-event-vs-crystal-model memory): the pose is overlay/provenance;
-  refinement targets the per-crystal `Dataset.current_model`, never a per-event
-  ligand-only fragment. This is the groundwork the #4/#4b build+refine loop sits
-  on.
-- **Immediate next: #4 / #4b** — the artifact-*producing* paths. Schema + seam
-  exist; the viewer doesn't yet drive them (`loadEvent` still centres on
-  `xyz_centroid`, not the pose; no build/refine action calls a `Job`).
+- **MVP works end to end + the full inspect→build→refine loop is LIVE.** Django
+  +DRF backend (Project/Dataset/Event/Artifact/Shell) + React/Moorhen client.
+  You can browse, triage, **merge a ligand at its pose (→ auto-decision Hit)**,
+  **dispatch a crystal refinement and have the model + map update on
+  completion**, all through the UI. Public repo, clean history.
+- **Reinspect desktop app SHIPPED** (was ROADMAP #6): signed + notarized
+  cross-platform installers (macOS `.dmg`, Windows `.exe`, Linux
+  `.AppImage`/`.deb`) on the [Releases page](../../releases/latest), built by
+  `.github/workflows/electron.yml`. Current release **v0.1.1**. See
+  [packaging/README.md](../packaging/README.md) and the electron-shell /
+  electron-ci-signing notes.
+- **Ingest-in-place** (no-copy): point the app's *Browse folder* at a PanDDA
+  output dir and it's ingested where it lives (`source_root`), via the
+  localhost-guarded `POST /api/v1/projects/ingest_path/`
+  (`importer.ingest_path`). Not in the old ROADMAP at all.
+- **Build + refine artifact paths are DONE** (were #4/#4b "designed"): ligand
+  merge → `origin=built` artifact repointing `Event.current_model` +
+  `pose_merged` + auto `decision=Hit` (`buildservice.land_built_model`,
+  `views.commit_model`); refinement → `Job` dispatched via `jobservice`, polled
+  non-modally per-dataset, lands the refined PDB+MTZ on success and repoints
+  `Dataset.current_model` / `current_sf`. The **map-of-record** evolves with it
+  (dimple MTZ at ingest → servalcat MTZ after refine).
+- **Inspect-drawer triage & navigation UX — DONE** (see §7): dataset-header
+  chips, Sort dropdown, 3-state Active/With-events/All filter, prev/next nav
+  across dataset boundaries, autobuild-backed event chips.
+- **Per-event autobuild ingested — DONE**: `ingest_pandda2` parses each event's
+  `events.yaml` `Build:` block into an event-scoped `LIGAND_POSE` artifact +
+  `build_score`/`rscc`/`optimal_contour` on the Event (migration 0007;
+  `test_event_autobuild.py`). Model-of-record settled: the pose is
+  overlay/provenance; refinement targets the per-crystal `Dataset.current_model`.
 - **Public dataset resolved & fetched**: BAZ2B vs Zenobia fragment library,
   Zenodo DOI 10.5281/zenodo.48768, **CC-BY-SA-4.0**, 201 datasets. Living at
   `~/Developer/pandda-data/BAZ2B-zenodo-48768/` (OUTSIDE the repo — ShareAlike
@@ -42,8 +52,8 @@ Last updated: 2026-05-31 (main @ `e330b6c`).
   sites. A separate `ingest_pandda2` management command reads the CSV+YAML
   format; the model gained `Event.score` (PanDDA2 `hit_in_site_probability`,
   the machine's ML opinion — distinct from human `decision`) and
-  `Event.interesting`; the client gained a CCP4-map path (`loadToCootFromMapURL`)
-  and a `SiteView`. **The detailed engineering learnings from all this are in
+  `Event.interesting`; the client gained a CCP4-map path
+  (`loadToCootFromMapURL`). **The detailed engineering learnings from all this are in
   [CLAUDE.md](../CLAUDE.md) — read that for the *how*; this file is the *what's
   next*.**
 
@@ -85,35 +95,34 @@ Implementation order is in §4 of the DESIGN doc; schema (items 1–2) lands bef
 the job/build features (#4) so artifact-producing actions can't predate the
 lineage model.
 
-### 3. Back-to-app continuity — ○ QUICK WIN
-InspectPage is full-bleed (`position:absolute; inset:0`) so app chrome vanishes.
-Add a floating "← Back to {project}" Fab top-left (high z-index) — NOT a full
-AppBar (it steals canvas height). ~15 lines.
+### 3. Back-to-app continuity — ◧ PARTIAL
+A breadcrumb (Home icon + project `Link`) exists in the inspect side panel
+(`InspectDrawer.tsx`). The original ask — a floating "← Back to {project}" Fab
+on the full-bleed canvas itself — is **not** done; the breadcrumb covers the
+need adequately, so this is low-priority polish now, not a gap.
 
-### 4. "Add current ligand at current location" → auto-swap decision to Hit — ◧ DESIGNED (after #2 schema)
-Reuse the prototype Coot-call IDEA (proven on Moorhen 0.23):
-`cootCommand get_monomer_and_position_at ["LIG", molNo, ...origin negated]`
-→ `theMolecule.fitLigand(activeMap.molNo, ligandMol.molNo, …)`
-→ `merge_molecules` → redraw. Building a ligand *is* the hit assertion → fire
-the decision PATCH automatically. **Produces the artifact #2 governs — don't
-build before #2 settles, or it recreates the drift bug.** Now designed in
-[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) §2.2: #4 is
-*interactive* (no `Job` row) and registers its output as
-`Artifact(origin=built, parent=<input>, produced_by=null)` repointing
-`Event.current_model` — same artifact contract as a dispatched job, different
-producer.
+### 4. "Add current ligand at current location" → auto-swap decision to Hit — ✅ DONE
+**Shipped.** The inspect drawer's **Merge ligand** button (on a candidate pose)
+exports the merged PDB and calls `commitModel(ev, merge=true)`;
+`views.commit_model` → `buildservice.land_built_model` registers an
+`Artifact(origin=built, parent=<input>)`, repoints `Event.current_model`, sets
+`Event.pose_merged=True`, and auto-fires `decision=Hit` when the event was
+unreviewed. Same artifact contract as a dispatched job, different producer —
+exactly as designed in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) §2.2. Covered by
+`test_event_autobuild.py`.
 
-### 4b. Task dispatch / tracking (`giant.quick_refine`) + Electron & compose bindings — ◧ DESIGNED
-New scope captured this session, all in
-[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md): a real `Job`
-model + `JobRunner` lit up (`LocalProcessRunner` shells out to
-`giant.quick_refine`, env-detected/gated); a **handover Electron app** (bundled
-frozen-Python backend via PyInstaller, CI-built installer) that exercises the
-full inspect → build → refine → land-artifact loop; and a **docker-compose
-binding** of the *same* backend (native-arch `web` + amd64 CCP4 `runner` sidecar
-+ shared-volume `SharedVolumeRunner`, cross-arch enabled from the start) that
-*proves* the "code once, deploy many scenarios" claim via the seam diff. See
-DESIGN §2–3 and the implementation order in §4.
+### 4b. Refine dispatch / tracking + Electron binding — ✅ DONE (compose binding → see Next steps)
+**Shipped.** A real `Job` model + `JobRunner` seam: `submitRefine` dispatches a
+refinement of the dataset's `current_model` vs its MTZ; `jobservice` runs it
+(servalcat by default), and `refresh_job._land` idempotently (`select_for_update`)
+lands the refined PDB+MTZ and repoints `Dataset.current_model` / `current_sf`.
+The client polls **non-modally, per dataset** (`pollRefineJob`, `jobsByDataset`)
+so you keep inspecting while it runs, and reloads the 3D model on completion if
+you're still on that crystal. The **Electron binding** (frozen-Python backend +
+CI-built signed installers) is likewise done — it's the shipped Reinspect app.
+**Still future:** the **docker-compose binding** (`SharedVolumeRunner` + sidecar)
+— design-complete, promoted to [Next steps](#next-steps).
 
 ### 5. Real PanDDA2 analysis + reconcile data model — ✅ DONE (run + row-level diff complete)
 The BAZ2B run finished (309 events, 41 sites); a separate `ingest_pandda2`
@@ -137,20 +146,24 @@ of findings (2026-05-30, from running pandda2 + reading the editable source at
   modelled_structures/ ligand_files/`. Inputs symlinked as
   `<dtag>-pandda-input.pdb/.mtz`.
 - **Impact**: internal Dataset/Event/Artifact/Shell model **survives**; what
-  changes = (a) CSV+YAML reader (not JSON), (b) add a **first-class Site entity**
-  (PanDDA2 has a sites table; we only had bare `site_num` — also backs the
-  "tab per site" UI; cf. `SiteView.tsx`), (c) different artifact-discovery paths.
+  changes = (a) CSV+YAML reader (not JSON), (b) sites are still derived from
+  bare `site_num` (a **first-class Site entity** is not built — it backs the
+  "tab per site" UI in [N1](#n1-sites-tab--browse-crystals-filtered-by-site)),
+  (c) different artifact-discovery paths.
 - **DEFERRED**: row-level diff of `pandda_analyse_events.csv` / `_sites.csv`
   against our schema — those globals are written only at the END in `analyses/`.
   Revisit when `analyses/` populates. (System python3.14 lacks `yaml`; use the
   pandda2 conda-env python to parse YAML.)
 
-### 6. Electron full-stack app — ○ DESKTOP PACKAGING
-Many users want a self-contained laptop/desktop install. Electron is simply the
-**laptop binding of the same contract architecture**: bundle the backend +
-SQLite + client, wired to `LocalFileStore` + `LocalProcessRunner`. The value is
-that one codebase serves both a desktop install and a hosted deployment with no
-divergence — desktop and cloud from the same contract.
+### 6. Electron full-stack app — ✅ DONE / SHIPPED (v0.1.1)
+The **laptop binding of the same contract architecture**: the frozen Django
+backend + SQLite + built client, wired to `LocalFileStore` + the local job
+runner, packaged as **Reinspect**. Electron's main process spawns the frozen
+backend and points a window at it; electron-builder produces signed/notarized
+installers via a mac/win/linux CI matrix; a tag publishes a GitHub Release. One
+codebase serves desktop and (future) hosted with no divergence. Detail:
+[packaging/README.md](../packaging/README.md). Open polish: arm64-only macOS
+(no Intel/universal yet), Windows unsigned.
 
 ### 7. Inspect-drawer triage & navigation UX — ✅ DONE (2026-05-31, main @ e330b6c)
 The grouped accordion drawer became a real triage surface, all client-side in
@@ -169,28 +182,93 @@ The grouped accordion drawer became a real triage surface, all client-side in
 - Ingest side (the `LIGAND_POSE` + build-metrics parsing this UX reads) is
   tested in `inspect_api/tests/test_event_autobuild.py`. Client UI itself is
   untested — a Vitest setup is a later add.
-- **Not yet**: the viewer doesn't consume the pose for centring/overlay
-  (`loadEvent` centres on `xyz_centroid`); that, plus the build/refine actions,
-  is #4/#4b.
+- **Since shipped** (was "not yet" here): the build + refine actions (#4/#4b)
+  are now live — merge a pose to a built model, dispatch a refinement, model +
+  map update on completion.
+
+## Next steps
+
+The core inspect→build→refine loop and the desktop app are done; these are the
+features that make it a *campaign* tool and broaden its reach. Roughly ordered
+by value-for-effort. Each notes what already exists to build on.
+
+### N1. "Sites" tab — browse crystals filtered by site
+A binding **site** is a recurrent location seen across many crystals; today it's
+only `Event.site_num` + derived per-site summaries (no first-class entity — the
+audit confirmed no `Site` model). Promote it: group the event/crystal list **by
+site**, so you can review "every crystal that has an event at site 3" in one
+pass. Scaffolding already exists — `client/src/grouping.ts` declares
+`GroupAxis = "dataset" | "site"` and the dashboard already plumbs `n_sites` +
+per-site distributions. Needs: a site axis in the drawer (group by `site_num`,
+derive the centroid from member events — the CSV centroids are often `(0,0,0)`),
+and a per-site header. A backend `Site` entity/endpoint (ROADMAP §5's deferred
+item) is optional v1 — derived grouping suffices to start.
+
+### N2. Summary Moorhen views — campaign & per-site overviews
+Generate Moorhen scenes that *summarise* rather than inspect one event:
+(a) a **campaign view** and (b) a **per-site view** — protein in **ribbon** plus
+**all built ligands** drawn as properly-bonded sticks (CBs), so you see the
+whole fragment-binding picture at a glance. Mechanically feasible now:
+`moorhen-shim.ts` exposes `addRepresentation(style, cid)` (ribbon) and the
+per-pose `loadToCootFromURL` + `fetchIfDirtyAndDraw("CBs")` path already used in
+the drawer. Needs: an endpoint returning the model + the set of built ligand
+poses for a project/site, and a viewer mode that loads them together. Pairs
+naturally with N1 (a site's view = its members' ligands on the reference model).
+
+### N3. Export to the legacy pandda.inspect project shape
+*(was a parked idea — promoting it.)* Downstream tools (Fragalysis /
+XChemExplorer) expect the legacy pandda.inspect-ed layout: versioned
+`modelled_structures/<dtag>-pandda-model.pdb` (+ symlink-to-latest) and the
+`pandda_inspect_events.csv` decision columns. Our durable state is the DB
+(`Dataset.current_model` lineage + `Event.decision`/`pose_merged`), so this is
+an **export adapter** — the *reverse* of the ingest import-boundary, same
+principle (filesystem is a projection, DB is truth): an `export_pandda_inspect`
+command (and a UI/CLI trigger producing a downloadable artifact) materialising
+`current_model` → the legacy model path and decisions → the inspect CSVs. The
+cleanest interop story; scope to the columns a real consumer needs.
+
+### N4. docker-compose binding — prove "code once, deploy many"
+*(promoted from #4b; the audit found it design-complete but unimplemented.)*
+The **second `JobRunner` binding**: the same backend as `web` + an amd64 CCP4
+`runner` sidecar sharing a volume, with a `SharedVolumeRunner` (job-as-file
+queue; `LocalProcessRunner`'s status-file wrapper already "pre-proves" the
+pattern). This is the highest-signal architecture demo — it shows the
+`DataStore`/`JobRunner` seam delivering desktop **and** server from one codebase
+with only the binding swapped. Fully specced in
+[DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) §3.2–3.3; needs
+`compose.yml`, Dockerfiles, and the `SharedVolumeRunner` class. (Note the
+overlap with the Materia/R6 work below — both exercise the path-resolution
+seam.)
+
+### N5. Decision provenance (who / when)
+Surface **`inspected_by` + a timestamp** on each decision — legacy
+pandda.inspect records this, and it's the prerequisite the API-first,
+multi-reviewer thesis actually rests on. Small (a couple of fields + serializer
++ a line in the drawer), but it's what turns "a decision" into "an auditable
+review trail."
+
+### N6. Keyboard-driven triage
+The drawer already steps prev/next across events; add **hit / miss / unsure
+hotkeys** (+ next) so a reviewer can rip through a campaign without the mouse.
+Pure UX, high daily value, no backend change.
+
+### N7. Re-ingest diff view
+Reconciliation already computes `inputs_changed` flags when a re-ingest /
+PanDDA-rerun diverges from prior state ("surface, don't resolve") — but nothing
+in the UI **shows** it. A "what changed since the last PanDDA run" view makes
+the (already-built, currently invisible) re-ingest safety story visible.
+
+### N8. 2D ligand gallery navigation
+*(parked idea, still apt.)* Once events are *interpreted* (a built ligand = a
+real entity), offer an RDKit 2D-sketch gallery as primary navigation — "jump to
+the crystals where compound X was built." Distinguish *soaked* (data/) vs
+*modelled* (models/) compounds; needs the built-event state N5/N1 surface.
 
 ## Parked ideas (revisit later)
-- **Export working model back to the legacy pandda.inspect project shape**:
-  downstream workflows (Fragalysis / XChemExplorer ingestion) expect the legacy
-  pandda.inspect-ed project layout — notably the versioned per-crystal
-  `modelled_structures/<dtag>-pandda-model.pdb` (+ symlink-to-latest) and the
-  `pandda_inspect_events.csv` decision columns. Our durable state is the DB
-  (Dataset.current_model lineage + Event.decision/pose_merged), so we'd need an
-  **export adapter** that writes our working model + decisions back into that
-  on-disk shape. This is the *reverse* of the ingest import-boundary — same
-  principle (filesystem is a projection, DB is truth), so it fits cleanly:
-  a `export_pandda_inspect` command materialising current_model → the legacy
-  model path + decisions → the inspect CSVs. Needed for interop, not for the
-  core loop; scope when a downstream consumer actually requires it.
-- **RDKit "navigate by built compound" gallery**: once events are *interpreted*
-  (built ligand = real entity), offer a gallery of 2D sketches as primary
-  navigation. Needs an "interpreted/built" event state first. Distinguish
-  *soaked* compound (data/) vs *modelled* compound (models/) — they can differ.
-- **JobRunner progress reporting** (#7-ish, depends on #2): light up
+*(Export, the docker-compose binding, and the 2D-ligand gallery moved up to
+[Next steps](#next-steps); these remain genuinely parked.)*
+
+- **JobRunner progress reporting** (depends on #2): light up
   `JobRunner.status()/logs()` — the most architecture-revealing feature, since
   *how you get progress* is the most backend-specific part (local tail vs qsub
   logfile vs cloud API). PanDDA2 progress signal = `processed_datasets/*` count
