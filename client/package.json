@@ -1,7 +1,7 @@
 {
   "name": "pandda-inspect-client",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "copy:assets": "copyfiles -u 3 \"node_modules/moorhen/public/**/*\" public/ && copyfiles -u 4 \"node_modules/@rdkit/rdkit/dist/RDKit_minimal.*\" public/ && copyfiles -u 1 \"brand/*\" public/",

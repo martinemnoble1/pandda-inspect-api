@@ -1,7 +1,7 @@
 {
   "name": "pandda-inspect",
   "productName": "Reinspect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Reinspect — an independent prototype client for reviewing PanDDA events (spawns the frozen Django backend, loads the Moorhen client). Not affiliated with the PanDDA project.",
   "author": {
