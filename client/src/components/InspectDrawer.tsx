@@ -339,7 +339,7 @@ export function InspectDrawer({
           loaded.push({
             map,
             molNo: map.molNo,
-            label: "Event map",
+            label: "Event",
             sigma,
             isDifference: false,
             visible: true,
@@ -375,7 +375,7 @@ export function InspectDrawer({
             loaded.push({
               map: mmap,
               molNo: mmap.molNo,
-              label: col.isDifference ? "mFo-DFc (diff)" : "2mFo-DFc",
+              label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
               sigma: msigma,
               isDifference: col.isDifference,
               visible: true,
@@ -1179,44 +1179,42 @@ export function InspectDrawer({
               <strong>{selected.site_num ?? "—"}</strong>
             </Box>
 
-            {/* One control row per loaded map: visibility toggle + label +
-                σ contour slider. Lets all three (event, 2mFo-DFc, mFo-DFc) be
-                contoured independently and hidden to declutter. */}
+            {/* One compact row per loaded map: toggle · brief label+σ ·
+                slider, all on a single line to save vertical space. Lets all
+                three (event, 2Fo-Fc, Fo-Fc) be contoured + hidden to declutter. */}
             {maps.length === 0 ? (
               <Typography variant="caption" color="text.secondary">
                 No maps loaded.
               </Typography>
             ) : (
               maps.map((m) => (
-                <Box key={m.molNo}>
-                  <Stack
-                    direction="row"
-                    spacing={0.5}
-                    alignItems="center"
+                <Stack
+                  key={m.molNo}
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                >
+                  <Tooltip title={m.visible ? "Hide map" : "Show map"} arrow>
+                    <IconButton
+                      size="small"
+                      sx={{ p: 0.25 }}
+                      onClick={() => onToggleVisible(m.molNo)}
+                    >
+                      {m.visible ? (
+                        <VisibilityIcon fontSize="inherit" />
+                      ) : (
+                        <VisibilityOffIcon fontSize="inherit" />
+                      )}
+                    </IconButton>
+                  </Tooltip>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ width: 96, flexShrink: 0 }}
                   >
-                    <Tooltip
-                      title={m.visible ? "Hide map" : "Show map"}
-                      arrow
-                    >
-                      <IconButton
-                        size="small"
-                        onClick={() => onToggleVisible(m.molNo)}
-                      >
-                        {m.visible ? (
-                          <VisibilityIcon fontSize="inherit" />
-                        ) : (
-                          <VisibilityOffIcon fontSize="inherit" />
-                        )}
-                      </IconButton>
-                    </Tooltip>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ flex: 1 }}
-                    >
-                      {m.label}: {m.sigma.toFixed(2)} σ
-                    </Typography>
-                  </Stack>
+                    {m.label} {m.sigma.toFixed(1)}σ
+                  </Typography>
                   <Slider
                     size="small"
                     min={0}
@@ -1227,8 +1225,9 @@ export function InspectDrawer({
                     onChange={(_, v) =>
                       onContour(m.molNo, Array.isArray(v) ? v[0] : v)
                     }
+                    sx={{ flex: 1 }}
                   />
-                </Box>
+                </Stack>
               ))
             )}
 
