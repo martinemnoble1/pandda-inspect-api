@@ -4,14 +4,35 @@
  */
 const BASE = "/api/v1";
 
+export interface SiteSummary {
+  site_num: number;
+  n_events: number;
+  n_hits: number;
+}
+// Raw (unbinned) distribution values backing the dashboard's native charts —
+// a live modernisation of PanDDA1's pandda_analyse.html graphs. The client
+// bins them. event_fraction = 1 − BDC (bound-state fraction). map_uncertainty
+// is deliberately absent (empty in PanDDA2 output).
+export interface Distributions {
+  event_fraction: number[];
+  event_resolution: number[];
+  dataset_resolution: number[];
+  r_free: number[];
+}
 export interface ProjectStatus {
   analysed: boolean;
   n_datasets: number;
   n_events: number;
   n_sites: number;
   n_hits: number;
+  n_no_hit: number;
+  n_ambiguous: number;
   n_reviewed: number;
+  n_built: number;
+  n_refined: number;
   hit_rate: number | null;
+  sites: SiteSummary[];
+  distributions: Distributions;
 }
 export interface Project {
   id: number;

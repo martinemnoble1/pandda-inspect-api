@@ -5,15 +5,18 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Grid,
   Paper,
+  Stack,
   Tab,
   Tabs,
   Typography,
 } from "@mui/material";
 import ScienceIcon from "@mui/icons-material/Science";
 import { api, type Artifact, type Project } from "../api";
+import { SummaryCharts } from "../components/SummaryCharts";
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
@@ -108,33 +111,64 @@ export function ProjectDashboard() {
         </Grid>
       </Grid>
 
+      {/* DB-backed project summary — a live modernisation of PanDDA1's
+          pandda_analyse.html (PanDDA2 emits no HTML reports). Curation progress
+          + per-site distribution, reflecting the current inspection state. */}
       <Typography variant="h6" gutterBottom>
-        Reports
+        Summary
       </Typography>
-      {reports.length === 0 ? (
-        <Typography color="text.secondary">No HTML reports found.</Typography>
-      ) : (
-        <Paper variant="outlined">
-          <Tabs
-            value={tab}
-            onChange={(_, v) => setTab(v)}
-            variant="scrollable"
-            scrollButtons="auto"
-          >
-            {reports.map((r) => (
-              <Tab key={r.id} label={reportName(r)} />
-            ))}
-          </Tabs>
-          <Box sx={{ height: "70vh" }}>
-            {reports[tab] && (
-              <iframe
-                title={reportName(reports[tab])}
-                src={api.artifactUrl(reports[tab])}
-                style={{ width: "100%", height: "100%", border: "none" }}
-              />
-            )}
-          </Box>
-        </Paper>
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Chip label={`${s.n_reviewed}/${s.n_events} events reviewed`} />
+          <Chip color="success" label={`${s.n_hits} hits`} />
+          <Chip color="error" variant="outlined" label={`${s.n_no_hit} no-hit`} />
+          {s.n_ambiguous > 0 && (
+            <Chip variant="outlined" label={`${s.n_ambiguous} ambiguous`} />
+          )}
+          <Chip
+            color="info"
+            variant="outlined"
+            label={`${s.n_built} ligands built`}
+          />
+          <Chip
+            color="info"
+            variant="outlined"
+            label={`${s.n_refined} crystals refined`}
+          />
+        </Stack>
+        <SummaryCharts distributions={s.distributions} sites={s.sites} />
+      </Paper>
+
+      {/* Legacy external HTML reports (PanDDA1 only — PanDDA2 emits none, in
+          which case the live Summary above is the report and this section
+          simply isn't shown, rather than announcing an expected absence). */}
+      {reports.length > 0 && (
+        <>
+          <Typography variant="h6" gutterBottom>
+            Reports
+          </Typography>
+          <Paper variant="outlined">
+            <Tabs
+              value={tab}
+              onChange={(_, v) => setTab(v)}
+              variant="scrollable"
+              scrollButtons="auto"
+            >
+              {reports.map((r) => (
+                <Tab key={r.id} label={reportName(r)} />
+              ))}
+            </Tabs>
+            <Box sx={{ height: "70vh" }}>
+              {reports[tab] && (
+                <iframe
+                  title={reportName(reports[tab])}
+                  src={api.artifactUrl(reports[tab])}
+                  style={{ width: "100%", height: "100%", border: "none" }}
+                />
+              )}
+            </Box>
+          </Paper>
+        </>
       )}
     </Box>
   );
