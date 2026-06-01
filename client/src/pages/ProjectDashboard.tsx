@@ -139,36 +139,36 @@ export function ProjectDashboard() {
         <SummaryCharts distributions={s.distributions} sites={s.sites} />
       </Paper>
 
-      <Typography variant="h6" gutterBottom>
-        Reports
-      </Typography>
-      {reports.length === 0 ? (
-        <Typography color="text.secondary">
-          This analysis produced no HTML reports (PanDDA2 emits none; the live
-          Summary above is generated from the inspection database).
-        </Typography>
-      ) : (
-        <Paper variant="outlined">
-          <Tabs
-            value={tab}
-            onChange={(_, v) => setTab(v)}
-            variant="scrollable"
-            scrollButtons="auto"
-          >
-            {reports.map((r) => (
-              <Tab key={r.id} label={reportName(r)} />
-            ))}
-          </Tabs>
-          <Box sx={{ height: "70vh" }}>
-            {reports[tab] && (
-              <iframe
-                title={reportName(reports[tab])}
-                src={api.artifactUrl(reports[tab])}
-                style={{ width: "100%", height: "100%", border: "none" }}
-              />
-            )}
-          </Box>
-        </Paper>
+      {/* Legacy external HTML reports (PanDDA1 only — PanDDA2 emits none, in
+          which case the live Summary above is the report and this section
+          simply isn't shown, rather than announcing an expected absence). */}
+      {reports.length > 0 && (
+        <>
+          <Typography variant="h6" gutterBottom>
+            Reports
+          </Typography>
+          <Paper variant="outlined">
+            <Tabs
+              value={tab}
+              onChange={(_, v) => setTab(v)}
+              variant="scrollable"
+              scrollButtons="auto"
+            >
+              {reports.map((r) => (
+                <Tab key={r.id} label={reportName(r)} />
+              ))}
+            </Tabs>
+            <Box sx={{ height: "70vh" }}>
+              {reports[tab] && (
+                <iframe
+                  title={reportName(reports[tab])}
+                  src={api.artifactUrl(reports[tab])}
+                  style={{ width: "100%", height: "100%", border: "none" }}
+                />
+              )}
+            </Box>
+          </Paper>
+        </>
       )}
     </Box>
   );
