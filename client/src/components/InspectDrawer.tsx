@@ -28,12 +28,16 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import BuildCircleIcon from "@mui/icons-material/BuildCircle";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import store from "../store";
 import {
+  hideMap,
   newMap,
   newMolecule,
   recentre,
   setContourLevel,
+  showMap,
   type MoorhenMapLike,
   type MoorhenMoleculeLike,
 } from "../moorhen-shim";
@@ -78,6 +82,21 @@ interface Props {
 // much bulk. The ideal level is dataset/event-dependent — this is just the
 // starting point; the slider lets the user retune.
 const DEFAULT_EVENT_SIGMA = 2.0;
+// Default contour (σ) for a 2mFo-DFc direct map and an mFo-DFc difference map.
+const DEFAULT_2FOFC_SIGMA = 1.5;
+const DEFAULT_FOFC_SIGMA = 3.0;
+
+// A map currently loaded in the viewer, with the UI state to contour + toggle
+// it. ``map`` is the live MoorhenMap (for RMSD-aware σ→absolute conversion);
+// the rest drives the per-map control row.
+interface LoadedMap {
+  map: MoorhenMapLike;
+  molNo: number;
+  label: string;
+  sigma: number; // current contour in σ
+  isDifference: boolean;
+  visible: boolean;
+}
 
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
@@ -100,7 +119,9 @@ export function InspectDrawer({
   const [expanded, setExpanded] = useState<string | false>(false);
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [selected, setSelected] = useState<PanddaEvent | null>(null);
-  const [contour, setContour] = useState(DEFAULT_EVENT_SIGMA);
+  // All maps loaded for the live event (event map + model-based 2Fo-Fc/Fo-Fc),
+  // each with its own contour + visibility — drives the per-map control rows.
+  const [maps, setMaps] = useState<LoadedMap[]>([]);
   // Refinement is CRYSTAL-scoped (acts on the dataset's current_model vs its
   // MTZ; legacy pandda.inspect + DESIGN §1.2). refineAvail gates the action on
   // the CCP4 probe. Jobs are tracked PER DATASET (not per selected event) so a
@@ -110,7 +131,6 @@ export function InspectDrawer({
     useState<RefineAvailability | null>(null);
   const [jobsByDataset, setJobsByDataset] = useState<Record<number, Job>>({});
   const loadedDtag = useRef<string | null>(null);
-  const eventMapRef = useRef<MoorhenMapLike | null>(null);
   // The per-event autobuilt ligand pose overlaid as its own molecule (a
   // CANDIDATE proposal, distinct from the merged model). Cleared on every event
   // switch — unlike the per-crystal model, the pose is event-specific.
@@ -142,12 +162,12 @@ export function InspectDrawer({
 
   // Delete every map currently in the store (state.maps is an array in 0.23).
   const clearMaps = useCallback(async () => {
-    const maps: any[] = (store.getState() as any).maps ?? [];
-    for (const mp of maps) {
+    const storeMaps: any[] = (store.getState() as any).maps ?? [];
+    for (const mp of storeMaps) {
       await mp.delete();
       dispatch(removeMap(mp));
     }
-    eventMapRef.current = null;
+    setMaps([]);
   }, [dispatch]);
 
   // Drop the per-event pose overlay (if any). Called on every event switch.
@@ -244,6 +264,10 @@ export function InspectDrawer({
           );
         }
 
+        // Accumulate the maps loaded for this event (event + model-based),
+        // each with its contour/visibility UI state; committed via setMaps.
+        const loaded: LoadedMap[] = [];
+
         const emap = artifactOf(ev, "event_map");
         if (emap) {
           const map = newMap(commandCentre, store);
@@ -312,9 +336,14 @@ export function InspectDrawer({
           // Set the level via Redux — MoorhenMapManager re-contours off the
           // `contourLevels` slice, NOT off map.contourLevel (see shim note).
           dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
-          eventMapRef.current = map;
-          // Surface the level in σ for the slider (which is labelled in σ).
-          setContour(sigma);
+          loaded.push({
+            map,
+            molNo: map.molNo,
+            label: "Event map",
+            sigma,
+            isDifference: false,
+            visible: true,
+          });
         }
 
         // Model-based maps from current_sf (dimple MTZ at first, refined
@@ -332,9 +361,28 @@ export function InspectDrawer({
               isDifference: col.isDifference,
               useWeight: false,
             });
+            const msigma = col.isDifference
+              ? DEFAULT_FOFC_SIGMA
+              : DEFAULT_2FOFC_SIGMA;
+            const mlevel =
+              typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
+                ? msigma * mmap.mapRmsd
+                : msigma;
             dispatch(addMap(mmap as any));
+            dispatch(
+              setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
+            );
+            loaded.push({
+              map: mmap,
+              molNo: mmap.molNo,
+              label: col.isDifference ? "mFo-DFc (diff)" : "2mFo-DFc",
+              sigma: msigma,
+              isDifference: col.isDifference,
+              visible: true,
+            });
           }
         }
+        setMaps(loaded);
 
         // Overlay THIS event's autobuilt candidate pose as its own molecule —
         // only while it's NOT yet merged. pose_merged is now reliable (the apo
@@ -387,21 +435,36 @@ export function InspectDrawer({
   );
   loadEventRef.current = loadEvent;
 
+  // Contour ONE of the loaded maps (by molNo). Slider is in σ; Coot contours
+  // in ABSOLUTE units, so multiply by that map's RMSD. Dispatch — the
+  // MapManager redraws off the Redux contourLevels slice (poking
+  // map.contourLevel + drawMapContour does not re-render).
   const onContour = useCallback(
-    (_: Event, v: number | number[]) => {
-      // Slider is in σ; Coot contours in ABSOLUTE units, so multiply by RMSD.
-      const sigma = Array.isArray(v) ? v[0] : v;
-      setContour(sigma);
-      const map = eventMapRef.current;
-      if (map) {
-        const level =
-          typeof map.mapRmsd === "number" && map.mapRmsd > 0
-            ? sigma * map.mapRmsd
-            : sigma;
-        // Dispatch — the MapManager redraws off the Redux contourLevels slice.
-        // Poking map.contourLevel + drawMapContour() does not re-render.
-        dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
-      }
+    (molNo: number, sigma: number) => {
+      setMaps((prev) =>
+        prev.map((m) => (m.molNo === molNo ? { ...m, sigma } : m))
+      );
+      const m = maps.find((x) => x.molNo === molNo);
+      const rmsd = m?.map.mapRmsd;
+      const level =
+        typeof rmsd === "number" && rmsd > 0 ? sigma * rmsd : sigma;
+      dispatch(setContourLevel({ molNo, contourLevel: level }));
+    },
+    [dispatch, maps]
+  );
+
+  // Toggle a map's visibility (Redux-driven; MoorhenMapManager shows/hides off
+  // the visibleMaps slice). Lets the user declutter a dense 3-map view.
+  const onToggleVisible = useCallback(
+    (molNo: number) => {
+      setMaps((prev) =>
+        prev.map((m) => {
+          if (m.molNo !== molNo) return m;
+          const visible = !m.visible;
+          dispatch(visible ? showMap(m.map) : hideMap(m.map));
+          return { ...m, visible };
+        })
+      );
     },
     [dispatch]
   );
@@ -1116,20 +1179,58 @@ export function InspectDrawer({
               <strong>{selected.site_num ?? "—"}</strong>
             </Box>
 
-            <Box>
+            {/* One control row per loaded map: visibility toggle + label +
+                σ contour slider. Lets all three (event, 2mFo-DFc, mFo-DFc) be
+                contoured independently and hidden to declutter. */}
+            {maps.length === 0 ? (
               <Typography variant="caption" color="text.secondary">
-                Event map contour: {contour.toFixed(2)} σ
+                No maps loaded.
               </Typography>
-              <Slider
-                size="small"
-                min={0}
-                max={5}
-                step={0.05}
-                value={contour}
-                onChange={onContour}
-                disabled={!eventMapRef.current}
-              />
-            </Box>
+            ) : (
+              maps.map((m) => (
+                <Box key={m.molNo}>
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    alignItems="center"
+                  >
+                    <Tooltip
+                      title={m.visible ? "Hide map" : "Show map"}
+                      arrow
+                    >
+                      <IconButton
+                        size="small"
+                        onClick={() => onToggleVisible(m.molNo)}
+                      >
+                        {m.visible ? (
+                          <VisibilityIcon fontSize="inherit" />
+                        ) : (
+                          <VisibilityOffIcon fontSize="inherit" />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ flex: 1 }}
+                    >
+                      {m.label}: {m.sigma.toFixed(2)} σ
+                    </Typography>
+                  </Stack>
+                  <Slider
+                    size="small"
+                    min={0}
+                    max={m.isDifference ? 8 : 5}
+                    step={0.05}
+                    value={m.sigma}
+                    disabled={!m.visible}
+                    onChange={(_, v) =>
+                      onContour(m.molNo, Array.isArray(v) ? v[0] : v)
+                    }
+                  />
+                </Box>
+              ))
+            )}
 
             <ToggleButtonGroup
               size="small"

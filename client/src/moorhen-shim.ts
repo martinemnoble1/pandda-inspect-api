@@ -17,6 +17,8 @@ import {
   setActiveMap as _setActiveMap,
   setOrigin as _setOrigin,
   setContourLevel as _setContourLevel,
+  showMap as _showMap,
+  hideMap as _hideMap,
 } from "moorhen";
 
 // Loosely-typed handles. `any` is deliberate and localised to this shim.
@@ -112,6 +114,15 @@ export const setContourLevel = _setContourLevel as (payload: {
   molNo: number;
   contourLevel: number;
 }) => { type: string; payload: unknown };
+
+// Map visibility is Redux-driven too (mapContourSettings.visibleMaps;
+// MoorhenMapManager shows/hides reactively off it). Pass the MAP object.
+export const showMap = _showMap as (
+  map: unknown
+) => { type: string; payload: unknown };
+export const hideMap = _hideMap as (
+  map: unknown
+) => { type: string; payload: unknown };
 
 /**
  * Recentre the view on a Cartesian (Ångström) coordinate.
