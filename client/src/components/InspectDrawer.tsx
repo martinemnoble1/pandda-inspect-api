@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import { useDispatch } from "react-redux";
 import { addMap, addMolecule, removeMap, removeMolecule } from "moorhen";
 import type { moorhen } from "moorhen/types/moorhen";
@@ -13,6 +14,7 @@ import {
   CircularProgress,
   Divider,
   IconButton,
+  Link,
   MenuItem,
   Slider,
   Stack,
@@ -30,6 +32,7 @@ import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import HomeIcon from "@mui/icons-material/Home";
 import store from "../store";
 import {
   hideMap,
@@ -72,6 +75,7 @@ import { MolViewer } from "./MolViewer";
 
 interface Props {
   projectName: string;
+  projectId: number;
   glRef: RefObject<unknown>;
   commandCentre: RefObject<moorhen.CommandCentre | null>;
   cootInitialized: boolean;
@@ -106,6 +110,7 @@ const decisionColour = (d: string) =>
 
 export function InspectDrawer({
   projectName,
+  projectId,
   glRef,
   commandCentre,
   cootInitialized,
@@ -724,7 +729,29 @@ export function InspectDrawer({
           alignItems="center"
           justifyContent="space-between"
         >
-          <Typography variant="subtitle1">{projectName}</Typography>
+          {/* Breadcrumb: Home (top of app) · project name (project summary).
+              Lets the user navigate back out of the full-bleed inspect view. */}
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Tooltip title="Home">
+              <IconButton
+                component={RouterLink}
+                to="/"
+                size="small"
+                edge="start"
+              >
+                <HomeIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Link
+              component={RouterLink}
+              to={`/projects/${projectId}`}
+              variant="subtitle1"
+              underline="hover"
+              color="inherit"
+            >
+              {projectName}
+            </Link>
+          </Stack>
           <ToggleButtonGroup
             size="small"
             exclusive

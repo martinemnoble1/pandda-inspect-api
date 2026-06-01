@@ -52,6 +52,7 @@ export function InspectPage() {
         panelContent: (
           <InspectDrawer
             projectName={project?.name ?? ""}
+            projectId={id}
             glRef={glRef}
             commandCentre={commandCentre}
             cootInitialized={!!cootInitialized}
@@ -59,7 +60,7 @@ export function InspectPage() {
         ),
       },
     }),
-    [project?.name, cootInitialized]
+    [project?.name, id, cootInitialized]
   );
 
   useEffect(() => {
