@@ -5,10 +5,17 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Grid,
   Paper,
+  Stack,
   Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   Tabs,
   Typography,
 } from "@mui/material";
@@ -108,11 +115,66 @@ export function ProjectDashboard() {
         </Grid>
       </Grid>
 
+      {/* DB-backed project summary — a live modernisation of PanDDA1's
+          pandda_analyse.html (PanDDA2 emits no HTML reports). Curation progress
+          + per-site distribution, reflecting the current inspection state. */}
+      <Typography variant="h6" gutterBottom>
+        Summary
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Chip label={`${s.n_reviewed}/${s.n_events} events reviewed`} />
+          <Chip color="success" label={`${s.n_hits} hits`} />
+          <Chip color="error" variant="outlined" label={`${s.n_no_hit} no-hit`} />
+          {s.n_ambiguous > 0 && (
+            <Chip variant="outlined" label={`${s.n_ambiguous} ambiguous`} />
+          )}
+          <Chip
+            color="info"
+            variant="outlined"
+            label={`${s.n_built} ligands built`}
+          />
+          <Chip
+            color="info"
+            variant="outlined"
+            label={`${s.n_refined} crystals refined`}
+          />
+        </Stack>
+        {s.sites.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Event distribution over sites
+            </Typography>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Site</TableCell>
+                  <TableCell align="right">Events</TableCell>
+                  <TableCell align="right">Hits</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {s.sites.map((site) => (
+                  <TableRow key={site.site_num}>
+                    <TableCell>{site.site_num}</TableCell>
+                    <TableCell align="right">{site.n_events}</TableCell>
+                    <TableCell align="right">{site.n_hits}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Box>
+        )}
+      </Paper>
+
       <Typography variant="h6" gutterBottom>
         Reports
       </Typography>
       {reports.length === 0 ? (
-        <Typography color="text.secondary">No HTML reports found.</Typography>
+        <Typography color="text.secondary">
+          This analysis produced no HTML reports (PanDDA2 emits none; the live
+          Summary above is generated from the inspection database).
+        </Typography>
       ) : (
         <Paper variant="outlined">
           <Tabs

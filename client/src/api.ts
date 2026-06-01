@@ -4,14 +4,24 @@
  */
 const BASE = "/api/v1";
 
+export interface SiteSummary {
+  site_num: number;
+  n_events: number;
+  n_hits: number;
+}
 export interface ProjectStatus {
   analysed: boolean;
   n_datasets: number;
   n_events: number;
   n_sites: number;
   n_hits: number;
+  n_no_hit: number;
+  n_ambiguous: number;
   n_reviewed: number;
+  n_built: number;
+  n_refined: number;
   hit_rate: number | null;
+  sites: SiteSummary[];
 }
 export interface Project {
   id: number;

@@ -163,10 +163,18 @@ class ProjectSerializer(serializers.ModelSerializer):
     def get_status(self, obj):
         from .models import Event
 
+        from .models import Artifact, Dataset
+
         n_datasets = obj.datasets.count()
         events = Event.objects.filter(dataset__project=obj)
         n_events = events.count()
         n_hits = events.filter(decision=Event.Decision.HIT).count()
+        n_no_hit = events.filter(
+            decision=Event.Decision.NO_HIT
+        ).count()
+        n_ambiguous = events.filter(
+            decision=Event.Decision.AMBIGUOUS
+        ).count()
         n_reviewed = events.exclude(
             decision=Event.Decision.UNREVIEWED
         ).count()
@@ -176,15 +184,41 @@ class ProjectSerializer(serializers.ModelSerializer):
             .distinct()
             .count()
         )
+        # Curation progress beyond raw decisions: how many events have a built
+        # ligand merged in, and how many crystals have a refined model.
+        n_built = events.filter(pose_merged=True).count()
+        n_refined = (
+            Dataset.objects.filter(
+                project=obj,
+                current_model__origin=Artifact.Origin.REFINED,
+            ).count()
+        )
+        # Per-site rollup (events per site + hits) — backs a small site table.
+        site_rows = []
+        seen = events.exclude(site_num__isnull=True).values_list(
+            "site_num", flat=True
+        ).distinct().order_by("site_num")
+        for s in seen:
+            se = events.filter(site_num=s)
+            site_rows.append({
+                "site_num": s,
+                "n_events": se.count(),
+                "n_hits": se.filter(decision=Event.Decision.HIT).count(),
+            })
         return {
             "analysed": n_events > 0,
             "n_datasets": n_datasets,
             "n_events": n_events,
             "n_sites": n_sites,
             "n_hits": n_hits,
+            "n_no_hit": n_no_hit,
+            "n_ambiguous": n_ambiguous,
             "n_reviewed": n_reviewed,
+            "n_built": n_built,
+            "n_refined": n_refined,
             # Hit rate over reviewed events (None until any review happens).
             "hit_rate": (n_hits / n_reviewed) if n_reviewed else None,
+            "sites": site_rows,
         }
 
 
