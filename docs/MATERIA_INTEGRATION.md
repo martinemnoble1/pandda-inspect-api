@@ -56,7 +56,7 @@ default must keep working.
 | **R3** | Stamp `inspected_by` from authenticated user when auth on | `Event.inspected_by` is client free-text today | **Work — small,** and falls out of R2 (needs `request.user`). Keep client-supplied as the DEBUG/`local` fallback. |
 | **R4** | Widen `DataStore`: `url_for(ref) -> URL` (302 redirect) + non-path ref | `DataStore` is `open()->bytes` + `exists()` only | **Work — protocol widening.** Add `url_for`; `local` store leaves it unimplemented and falls back to byte-streaming. *Free for reads, not for runs* — see the run-path caveat. |
 | **R5** | `JobRunner` submit/poll/cancel without subprocess assumptions; opaque handle; foreign-ref output | `JobSpec` is "what, never where/how" ([jobs.py:34-43](../inspect_api/jobs.py#L34-L43)); handle is an opaque string; `Job.runner_handle` is a generic CharField | **Mostly confirmation.** The seam already supports a CCP4i2 job id as a handle and a remote runner. Output-as-foreign-ref ties into R6. *Run-path caveat applies.* |
-| **R6** | Artifact/Event reference is opaque to the core (CCP4i2 uuid, not bare relpath) | `Artifact` = `relpath` + optional embedded `contents`; **`jobservice._resolve_path()` and the download view resolve `source_root`/`relpath` themselves, bypassing `DataStore`** | **Work — the load-bearing refactor.** A uuid column is necessary but insufficient: route *all* resolution through `DataStore` first. **Lead here. Gated by Q2.** |
+| **R6** | Artifact/Event reference is opaque to the core (CCP4i2 uuid, not bare relpath) | **READ path DONE (2026-06-01):** the download view now routes through `storage.get_store(project).local_path()`; the symlink-aware guard moved into `LocalFileStore`. **Remaining:** `jobservice._resolve_path()` (the RUN path) still resolves locally — deliberately, see below; and the opaque uuid column itself. | **Partly done; rest gated by Q2.** Read-half landed (seam is now load-bearing for downloads). Run-path staging + uuid column deferred. |
 
 ---
 
@@ -81,6 +81,22 @@ Route `jobservice`, `buildservice`, and the download view through `DataStore`
 filesystem assumption that the `local` default quietly bakes in is removed.
 
 This is why R6 is *the* change, and why it's gated by Q2.
+
+**Done so far (2026-06-01, the non-reversing read-half):** `storage.py` gained
+`get_store(project)` (the `local` factory) and `LocalFileStore.local_path()`,
+and the symlink-aware traversal guard moved OUT of the download view INTO
+`LocalFileStore._resolve` (behaviour identical — verified: symlinked
+`-pandda-input.pdb` still resolves to its target outside source_root; `..`
+still blocked). The artifact **download view now routes through the store** —
+so the seam is genuinely load-bearing for reads, and a uuid/object store can be
+slotted in for downloads without touching the view. This was done now because
+it's correct regardless of Q2 and turns the remaining R6 from "refactor the read
+path under deadline" into "implement a store class". **Deliberately NOT done**
+(Q2-gated, premature otherwise): the opaque uuid column; routing
+`jobservice._resolve_path` (the RUN path — it builds not-yet-written output
+paths and a remote store must *materialise* bytes locally for servalcat/refmac,
+not pass through); `buildservice`. A forward-pointer comment in
+`jobservice._resolve_path` + CLAUDE.md holds the "no 4th inline resolver" line.
 
 ### The run-path caveat (R4/R5 are free for reads, not for runs)
 

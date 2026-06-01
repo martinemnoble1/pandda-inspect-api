@@ -32,8 +32,14 @@ class JobError(Exception):
 def _resolve_path(artifact: Artifact) -> Path:
     """Absolute on-disk path for an artifact, via its project's source_root.
 
-    Mirrors the download view's resolution: relpath under source_root (the tree
-    ingested from), falling back to PANDDA_DATA_ROOT/<name>.
+    Mirrors the download view's resolution. NB this still resolves locally
+    rather than via the DataStore seam: unlike the read path, the runner both
+    READS inputs and BUILDS paths for not-yet-written outputs, and a non-local
+    store must MATERIALISE bytes to local disk for servalcat/refmac (it's not a
+    pass-through). That run-path staging is a real piece of work the binding's
+    runner owns — deliberately deferred, gated by Q2. Do NOT add a 4th inline
+    resolver elsewhere; new READ paths go through ``storage.get_store``. See
+    docs/MATERIA_INTEGRATION.md R6 + the run-path caveat.
     """
     project = artifact.owning_project
     root = Path(

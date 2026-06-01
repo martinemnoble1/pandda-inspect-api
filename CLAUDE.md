@@ -83,10 +83,20 @@ reconciliation policy for re-ingest / PanDDA-rerun is an open design question.
   was ingested from), falling back to `PANDDA_DATA_ROOT/<name>`. This lets you
   ingest a large/externally-licensed dataset **in place** (`ingest_pandda2
   --root /anywhere`) without copying it into the repo tree.
-- The download view's traversal guard checks the relpath **lexically (normpath)
-  BEFORE resolving symlinks**, then follows the symlink. This is deliberate: it
-  blocks `../` escapes while still serving PanDDA2's symlinked inputs (whose
-  targets legitimately live outside `source_root`).
+- The traversal guard checks the relpath **lexically (normpath) BEFORE resolving
+  symlinks**, then follows the symlink. This is deliberate: it blocks `../`
+  escapes while still serving PanDDA2's symlinked inputs (whose targets
+  legitimately live outside `source_root`). This guard now lives in
+  `storage.LocalFileStore._resolve` (the download view routes through
+  `storage.get_store(project).local_path(relpath)`), NOT inline in the view.
+- **READ paths go through the `DataStore` seam (`storage.get_store`)** — the
+  single place that turns an artifact ref into bytes/a file, so a non-local
+  store (object storage, CCP4i2 uuids) slots in without touching callers
+  (Materia R6). **Do NOT add another inline `source_root`/`relpath` resolver.**
+  The one remaining local resolver is `jobservice._resolve_path` (the RUN path:
+  it also builds paths for not-yet-written outputs, and a non-local store must
+  *materialise* bytes locally for servalcat/refmac — not a pass-through). That
+  staging is deferred, gated by Q2 — see docs/MATERIA_INTEGRATION.md.
 - A web client can NEVER hand the server a directory path (browser sandbox) — so
   "ingest without copy" is a CLI / Electron / register-path affordance, not a
   browser one. `source_root` is the single abstraction that expresses all three.

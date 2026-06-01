@@ -1,8 +1,6 @@
-import os
 import tempfile
 from pathlib import Path
 
-from django.conf import settings
 from django.db import models
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
@@ -17,6 +15,7 @@ from .importer import ImportError_, import_zip
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
 from .models import Artifact, Dataset, Event, Job, Project, Shell
+from .storage import get_store
 from .serializers import (
     ArtifactSerializer,
     DatasetSerializer,
@@ -224,29 +223,18 @@ class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):
         project = artifact.owning_project
         if project is None:
             raise Http404("Artifact has no owning project")
-        # ``relpath`` is relative to the project's source_root — the tree it was
-        # ingested from, which may be an in-place PanDDA output dir anywhere on
-        # disk (e.g. a large, externally-licensed dataset we don't copy into the
-        # data root). Fall back to the DATA_ROOT/name layout for projects landed
-        # there by the zip importer.
-        root = Path(
-            project.source_root
-            or (Path(settings.PANDDA_DATA_ROOT) / project.name)
-        ).resolve()
-        # Traversal guard, done *before* resolving symlinks. We validate that the
-        # relpath itself can't climb out of the project root (e.g. via "..") —
-        # but we must NOT then reject a legitimate symlink whose *target* lives
-        # elsewhere. PanDDA2 routinely symlinks its inputs
-        # (``<dtag>-pandda-input.pdb/.mtz``) to a sibling ``data/`` dir, so
-        # resolving symlinks before the check would 404 every input structure.
-        candidate = (root / artifact.relpath)
-        # os.path.normpath collapses ".." lexically without following links.
-        lexical = Path(os.path.normpath(candidate))
-        if not str(lexical).startswith(str(root) + os.sep):
+        # Resolve the bytes through the DataStore seam — the SINGLE place that
+        # turns an artifact reference into a file, so a non-local store
+        # (object storage, CCP4i2 uuids) can be slotted in without touching this
+        # view (docs/MATERIA_INTEGRATION.md R6). The local store preserves the
+        # deliberate guard: lexical ``..`` check BEFORE following symlinks, so
+        # PanDDA2's symlinked inputs (targets outside source_root) still serve.
+        store = get_store(project)
+        try:
+            path = store.local_path(artifact.relpath)
+        except ValueError:
             raise Http404("Invalid artifact path")
-        # Now follow symlinks to the real bytes (target may be outside root).
-        path = candidate.resolve()
-        if not path.is_file():
+        if path is None:
             raise Http404(f"Artifact not on disk: {artifact.relpath}")
         resp = FileResponse(open(path, "rb"))
         # The client runs under COEP=require-corp (for Moorhen's WASM), so any
