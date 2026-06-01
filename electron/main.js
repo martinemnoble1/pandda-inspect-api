@@ -52,6 +52,97 @@ function writeConfig(cfg) {
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf8");
 }
 
+// --- refinement environment discovery (CCP4 + conda) -------------------------
+// servalcat (the refine tool) lives inside a CCP4 install + a PanDDA2 conda env,
+// NOT on the bare PATH. The backend's probe sources CCP4_SETUP_SH then activates
+// CONDA_SH/PANDDA2_CONDA_ENV before resolving the tool (inspect_api/jobs.py). A
+// Finder-launched .app has NO login-shell PATH, so we can't rely on the user's
+// shell having set these up — we must discover the setup scripts ourselves and
+// hand them to the backend at spawn. User-set paths (Settings) always win over
+// auto-detection; "" is a meaningful override (= "force off / not installed").
+function firstExisting(paths) {
+  for (const p of paths) {
+    try {
+      if (p && fs.existsSync(p)) return p;
+    } catch {
+      // ignore unreadable candidates
+    }
+  }
+  return "";
+}
+
+// Common CCP4 setup-script locations across the three desktop OSes. CCP4 names
+// the POSIX script `ccp4.setup-sh`; we glob the versioned install dirs.
+function detectCcp4Setup() {
+  const home = app.getPath("home");
+  const roots = [];
+  if (process.platform === "darwin") {
+    roots.push("/Applications");
+  } else if (process.platform === "win32") {
+    // Windows uses ccp4.setup-bat; the sh probe path doesn't apply, but keep a
+    // best-effort guess for WSL-style installs.
+    roots.push("C:\\");
+  } else {
+    roots.push("/opt", "/usr/local", home);
+  }
+  const candidates = [];
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (/^ccp4(-\d+)?$/i.test(name)) {
+        candidates.push(path.join(root, name, "bin", "ccp4.setup-sh"));
+      }
+    }
+  }
+  return firstExisting(candidates);
+}
+
+// conda.sh ships under <conda>/etc/profile.d/conda.sh. Check the usual installs.
+function detectCondaSh() {
+  const home = app.getPath("home");
+  const bases = [
+    process.env.CONDA_PREFIX,
+    process.env.CONDA_EXE && path.join(process.env.CONDA_EXE, "..", ".."),
+    path.join(home, "miniconda3"),
+    path.join(home, "anaconda3"),
+    path.join(home, "miniforge3"),
+    path.join(home, "mambaforge"),
+    "/opt/miniconda3",
+    "/opt/anaconda3",
+    "/opt/conda",
+  ];
+  return firstExisting(
+    bases
+      .filter(Boolean)
+      .map((b) => path.join(b, "etc", "profile.d", "conda.sh"))
+  );
+}
+
+// The effective refinement env vars passed to the backend: user overrides from
+// config (including an explicit "" = "off") take precedence over auto-detection.
+// Returns only the keys we actually want to set, so an absent/undetected one is
+// simply left unset (the backend treats unset as "skip that activation").
+function refineEnv() {
+  const cfg = readConfig().refineEnv || {};
+  const ccp4 =
+    cfg.CCP4_SETUP_SH !== undefined ? cfg.CCP4_SETUP_SH : detectCcp4Setup();
+  const condaSh =
+    cfg.CONDA_SH !== undefined ? cfg.CONDA_SH : detectCondaSh();
+  const condaEnv =
+    cfg.PANDDA2_CONDA_ENV !== undefined ? cfg.PANDDA2_CONDA_ENV : "pandda2";
+  const env = {};
+  if (ccp4) env.CCP4_SETUP_SH = ccp4;
+  if (condaSh) env.CONDA_SH = condaSh;
+  // Only meaningful alongside conda.sh, but harmless to pass on its own.
+  if (condaEnv) env.PANDDA2_CONDA_ENV = condaEnv;
+  return env;
+}
+
 // The effective data dir: the user's choice if set + still usable, else the
 // conventional per-user userData dir (always writable).
 function dataDir() {
@@ -148,6 +239,9 @@ async function startBackend() {
   backend = spawn(bin, [], {
     env: {
       ...process.env,
+      // CCP4/conda setup scripts so the backend can resolve servalcat — a
+      // Finder-launched app has no login-shell PATH to inherit these from.
+      ...refineEnv(),
       PANDDA_PORT: String(backendPort),
       PANDDA_DB_DIR: dir,
       PANDDA_DB_PATH: path.join(dir, "db.sqlite3"),
@@ -233,6 +327,19 @@ function registerIpc() {
     return res.filePaths[0];
   });
 
+  // Native file picker (single file). Returns an absolute path or null. Used to
+  // pick the CCP4 setup script / conda.sh for the refinement environment.
+  ipcMain.handle("pandda:pick-file", async (_evt, opts = {}) => {
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showOpenDialog(win, {
+      title: opts.title || "Choose a file",
+      properties: ["openFile"],
+      buttonLabel: opts.buttonLabel,
+    });
+    if (res.canceled || res.filePaths.length === 0) return null;
+    return res.filePaths[0];
+  });
+
   // Data-dir setting. get → effective dir; set → persist (validated writable)
   // and report that a relaunch is needed (the backend reads it only at spawn).
   ipcMain.handle("pandda:get-data-dir", () => ({
@@ -249,6 +356,57 @@ function registerIpc() {
     fs.accessSync(newPath, fs.constants.W_OK); // throws if not writable
     writeConfig({ ...readConfig(), dataDir: newPath });
     return { path: newPath, restartRequired: true };
+  });
+
+  // Refinement environment (CCP4 + conda) → resolves servalcat in the backend.
+  // get → the effective values (user override else auto-detected) plus whether
+  // each came from the user; set → persist overrides ("" = force off). Read only
+  // at spawn (like dataDir), so a change reports restartRequired.
+  ipcMain.handle("pandda:get-refine-env", () => {
+    const cfg = readConfig().refineEnv || {};
+    const detected = {
+      CCP4_SETUP_SH: detectCcp4Setup(),
+      CONDA_SH: detectCondaSh(),
+      PANDDA2_CONDA_ENV: "pandda2",
+    };
+    const pick = (key) =>
+      cfg[key] !== undefined ? cfg[key] : detected[key];
+    return {
+      effective: {
+        CCP4_SETUP_SH: pick("CCP4_SETUP_SH"),
+        CONDA_SH: pick("CONDA_SH"),
+        PANDDA2_CONDA_ENV: pick("PANDDA2_CONDA_ENV"),
+      },
+      detected,
+      overridden: {
+        CCP4_SETUP_SH: cfg.CCP4_SETUP_SH !== undefined,
+        CONDA_SH: cfg.CONDA_SH !== undefined,
+        PANDDA2_CONDA_ENV: cfg.PANDDA2_CONDA_ENV !== undefined,
+      },
+    };
+  });
+
+  // Persist refinement-env overrides. A key present (even "") is an override; a
+  // key set to null clears the override (falls back to auto-detection).
+  ipcMain.handle("pandda:set-refine-env", (_evt, patch) => {
+    if (!patch || typeof patch !== "object") {
+      throw new Error("refine env must be an object");
+    }
+    const cfg = readConfig();
+    const refine = { ...(cfg.refineEnv || {}) };
+    for (const key of ["CCP4_SETUP_SH", "CONDA_SH", "PANDDA2_CONDA_ENV"]) {
+      if (!(key in patch)) continue;
+      const v = patch[key];
+      if (v === null) {
+        delete refine[key]; // clear override → back to auto-detect
+      } else if (typeof v === "string") {
+        refine[key] = v; // "" is a valid override = force off
+      } else {
+        throw new Error(`${key} must be a string or null`);
+      }
+    }
+    writeConfig({ ...cfg, refineEnv: refine });
+    return { restartRequired: true };
   });
 
   ipcMain.handle("pandda:relaunch", () => {

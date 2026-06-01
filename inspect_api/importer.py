@@ -108,6 +108,7 @@ def ingest_path(source_dir: Path, project_name: str) -> dict:
     call_command(command, project=project_name, root=str(root))
     project = Project.objects.get(name=project_name)
     return {
+        "id": project.id,
         "flavour": flavour,
         "project": project_name,
         "source_root": str(root),
@@ -145,6 +146,7 @@ def import_zip(zip_path: Path, project_name: str) -> dict:
             )
             project = Project.objects.get(name=project_name)
             return {
+                "id": project.id,
                 "flavour": flavour,
                 "project": project_name,
                 "n_datasets": project.datasets.count(),
@@ -169,6 +171,7 @@ def import_zip(zip_path: Path, project_name: str) -> dict:
                     defaults={"subtitle": row.get("subtitle", "")},
                 )
         return {
+            "id": project.id,
             "flavour": flavour,
             "project": project_name,
             "n_datasets": project.datasets.count(),

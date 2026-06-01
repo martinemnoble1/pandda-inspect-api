@@ -1,4 +1,13 @@
-import { AppBar, Box, Button, Toolbar, Typography } from "@mui/material";
+import {
+  AppBar,
+  Box,
+  Button,
+  IconButton,
+  Toolbar,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import SettingsIcon from "@mui/icons-material/Settings";
 import { Link, Outlet } from "react-router-dom";
 import { isDesktop } from "../desktop";
 
@@ -22,9 +31,16 @@ export function Layout() {
             Import
           </Button>
           {isDesktop() && (
-            <Button color="inherit" component={Link} to="/settings">
-              Settings
-            </Button>
+            <Tooltip title="Settings">
+              <IconButton
+                color="inherit"
+                component={Link}
+                to="/settings"
+                aria-label="Settings"
+              >
+                <SettingsIcon />
+              </IconButton>
+            </Tooltip>
           )}
         </Toolbar>
       </AppBar>

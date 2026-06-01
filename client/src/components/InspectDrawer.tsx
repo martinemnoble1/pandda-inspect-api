@@ -40,6 +40,7 @@ import {
   newMap,
   newMolecule,
   recentre,
+  setActiveMap,
   setContourLevel,
   showMap,
   type MoorhenMapLike,
@@ -347,14 +348,11 @@ export function InspectDrawer({
               ? (ev.optimal_contour as number)
               : DEFAULT_EVENT_LEVEL;
           dispatch(addMap(map as any));
-          // NB: deliberately NOT setActiveMap here. Making this the active map
-          // mounts Moorhen's MapScrollWheelListener (MoorhenMapManager gates it
-          // on isMapActive), which reads map.mapCentre[0] unconditionally — and
-          // a freshly-loaded CCP4 map has mapCentre=null, crashing the render
-          // tree. We don't need the active map for inspect+contour: contour is
-          // dispatched by molNo (below), and the view follows the camera origin.
-          // The active map is a refinement-target concern — set it in #4 (ligand
-          // build / refine), where we'll also populate mapCentre properly.
+          // NB: we do NOT setActiveMap inline at addMap time — a freshly-loaded
+          // CCP4 map has mapCentre=null, and making it active mounts Moorhen's
+          // MapScrollWheelListener, which reads mapCentre[0] unconditionally and
+          // crashes the render tree. Activation happens once, after setMaps,
+          // guarded by fetchMapCentre() — see the activation block below.
           // Set the level via Redux — MoorhenMapManager re-contours off the
           // `contourLevels` slice, NOT off map.contourLevel (see shim note).
           dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
@@ -455,6 +453,45 @@ export function InspectDrawer({
           }
         }
         setMaps(loaded);
+
+        // Make a map the ACTIVE (refinement-target) map, so a merged ligand can
+        // be refined in Moorhen without manually picking the target map first
+        // (Coot's set_imol_refinement_map, via MoorhenMap.setActive). Prefer the
+        // model-based 2Fo-Fc map when a refinement exists (current_sf present) —
+        // that's the map you refine the whole-crystal model against; otherwise
+        // fall back to the event map.
+        //
+        // GUARDED (this is why fb17bf4 dropped inline setActiveMap): activating a
+        // map mounts MapScrollWheelListener, which reads map.mapCentre[0] on
+        // render with no null guard. A freshly-loaded CCP4 map has mapCentre=null
+        // → render-tree crash. fetchMapCentre() (Coot get_map_molecule_centre)
+        // populates it first; if that fails or yields null we SKIP activation
+        // rather than risk the crash — refinement just needs a manual target
+        // pick in that (rare) case, no worse than before.
+        const activeTarget =
+          loaded.find((m) => m.label === "2Fo-Fc") ??
+          loaded.find((m) => m.label === "Event");
+        if (activeTarget) {
+          try {
+            await activeTarget.map.fetchMapCentre();
+            if (activeTarget.map.mapCentre) {
+              dispatch(setActiveMap(activeTarget.map));
+            } else {
+              // eslint-disable-next-line no-console
+              console.warn(
+                "Skipping setActiveMap: mapCentre unresolved for " +
+                  `${activeTarget.label} map (molNo ${activeTarget.molNo}).`
+              );
+            }
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              "fetchMapCentre failed; not setting active map (refinement " +
+                "target must be picked manually).",
+              err
+            );
+          }
+        }
 
         // Re-assert our contour levels AFTER MoorhenMapManager mounts. Its mount
         // effect (intiliaseMap) dispatches its OWN default contourLevel for each

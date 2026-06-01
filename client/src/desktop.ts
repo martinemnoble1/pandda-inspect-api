@@ -11,14 +11,39 @@ export interface DataDirInfo {
   default: string;
 }
 
+// The three knobs that let the backend resolve servalcat (CCP4 setup script,
+// conda.sh, conda env name). `effective` is what the backend will be given;
+// `detected` is the auto-discovered value; `overridden` says whether the user
+// pinned each one. An empty-string override means "force off / not installed".
+export interface RefineEnvKeys {
+  CCP4_SETUP_SH: string;
+  CONDA_SH: string;
+  PANDDA2_CONDA_ENV: string;
+}
+
+export interface RefineEnvInfo {
+  effective: RefineEnvKeys;
+  detected: RefineEnvKeys;
+  overridden: Record<keyof RefineEnvKeys, boolean>;
+}
+
 export interface PanddaDesktop {
   isDesktop: true;
   pickDirectory(opts?: {
     title?: string;
     buttonLabel?: string;
   }): Promise<string | null>;
+  pickFile(opts?: {
+    title?: string;
+    buttonLabel?: string;
+  }): Promise<string | null>;
   getDataDir(): Promise<DataDirInfo>;
   setDataDir(path: string): Promise<{ path: string; restartRequired: boolean }>;
+  getRefineEnv(): Promise<RefineEnvInfo>;
+  // Patch override values; a key set to "" forces off, null clears the override.
+  setRefineEnv(
+    patch: Partial<Record<keyof RefineEnvKeys, string | null>>,
+  ): Promise<{ restartRequired: boolean }>;
   relaunch(): Promise<void>;
 }
 
