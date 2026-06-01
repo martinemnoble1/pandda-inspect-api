@@ -207,6 +207,18 @@ The grouped accordion drawer became a real triage surface, all client-side in
   rather than assumed; the aim is to find the cleanest path to interoperating
   with whichever platform(s) a deployment already uses.
 
+  **First concrete instance — Materia (embeds CCP4i2):** the repo-side
+  obligations for being incorporated by Materia are written up in
+  [MATERIA_INTEGRATION.md](MATERIA_INTEGRATION.md) (companion to Materia's own
+  proposal). Net: the `DataStore`/`JobRunner` protocols already exist, so most
+  requirements are confirmations; the real work is the **R6 refactor** (route
+  *all* path resolution through `DataStore` — `jobservice`/`buildservice`/the
+  download view bypass it today), gated by **Q2** ("where does PanDDA2 run",
+  which decides whether artifacts are born as relpaths or CCP4i2 uuids). Auth is
+  ratified as a *seam* (`PANDDA_AUTH_BACKEND`, open `local` default), **not** a
+  hard `ccp4i2-api` dependency. Sequence: Q2 → R6 → R0 registry/factories →
+  binding plugins.
+
 ## Background context (not to lose)
 - **Strategy**: this is an API-first reference for pandda.inspect. The API
   contract is the deliverable; storage and compute backends

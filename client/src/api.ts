@@ -128,17 +128,19 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} PATCH event ${eventId}`);
     return r.json() as Promise<PanddaEvent>;
   },
-  // Land a client-merged crystal model for an event (the build action: Coot
-  // merges the pose into the model, the client exports + POSTs the merged PDB;
-  // the backend versions it as origin=built and repoints current_model).
-  async buildLigand(eventId: number, pdb: string) {
-    const r = await fetch(`${BASE}/events/${eventId}/build_ligand/`, {
+  // Commit a client-edited crystal model as the dataset's current_model: the
+  // client exports the live Moorhen model (ligand merge, deleted waters,
+  // rotamers, alt-confs…) and POSTs it; the backend versions it origin=built
+  // and repoints current_model. ``merge`` marks a ligand merge for this event
+  // (sets pose_merged + auto-Hit); omit it for a generic save.
+  async commitModel(eventId: number, pdb: string, opts?: { merge?: boolean }) {
+    const r = await fetch(`${BASE}/events/${eventId}/commit_model/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pdb }),
+      body: JSON.stringify({ pdb, merge: opts?.merge ?? false }),
     });
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.detail || `${r.status} build failed`);
+    if (!r.ok) throw new Error(body.detail || `${r.status} commit failed`);
     return body as PanddaEvent;
   },
   async importZip(name: string, file: File) {

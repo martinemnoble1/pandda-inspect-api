@@ -482,6 +482,27 @@ export function InspectDrawer({
   // Merge this event's candidate pose INTO the crystal model — client-side in
   // Coot (merge_molecules), then persist the merged model through the API so
   // the canonical record updates (no drift). The merge is the hit assertion.
+  // Export the live model molecule and commit it as the dataset's
+  // current_model (origin=built). The shared tail of merge + generic save.
+  const commitLiveModel = useCallback(
+    async (ev: PanddaEvent, merge: boolean) => {
+      const model = modelMolRef.current;
+      if (!model) return;
+      const pdb = await model.getAtoms("pdb");
+      const updated = await api.commitModel(ev.id, pdb, { merge });
+      setDatasets((prev) =>
+        prev.map((ds) => ({
+          ...ds,
+          events: ds.events.map((e) =>
+            e.id === ev.id ? { ...e, ...updated } : e
+          ),
+        }))
+      );
+      setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
+    },
+    []
+  );
+
   const mergePose = useCallback(
     async (ev: PanddaEvent) => {
       const cc = commandCentre.current as
@@ -505,27 +526,33 @@ export function InspectDrawer({
         model.setAtomsDirty(true);
         await model.fetchIfDirtyAndDraw("CBs");
         await clearPose();
-        // Export the merged model + persist it (origin=built, repoint
-        // current_model, flag pose_merged, auto-Hit).
-        const pdb = await model.getAtoms("pdb");
-        const updated = await api.buildLigand(ev.id, pdb);
-        // Reflect the new decision/pose_merged in local state.
-        setDatasets((prev) =>
-          prev.map((ds) => ({
-            ...ds,
-            events: ds.events.map((e) =>
-              e.id === ev.id ? { ...e, ...updated } : e
-            ),
-          }))
-        );
-        setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
+        // Persist the merged model (merge=true -> pose_merged + auto-Hit).
+        await commitLiveModel(ev, true);
       } catch {
         /* surfaced via the merging flag clearing; non-fatal */
       } finally {
         setMerging(false);
       }
     },
-    [commandCentre, clearPose]
+    [commandCentre, clearPose, commitLiveModel]
+  );
+
+  // Generic "Save model edits": commit whatever the user has changed in
+  // Moorhen (deleted waters, rotamers, alt-confs/occupancy, …) as the new
+  // current_model — origin=built, no hit assertion (a plain edit isn't one).
+  const saveModel = useCallback(
+    async (ev: PanddaEvent) => {
+      if (!modelMolRef.current) return;
+      setMerging(true);
+      try {
+        await commitLiveModel(ev, false);
+      } catch {
+        /* non-fatal */
+      } finally {
+        setMerging(false);
+      }
+    },
+    [commitLiveModel]
   );
 
   // The dataset whose event is currently live in Moorhen — its ligand sketch
@@ -1129,6 +1156,31 @@ export function InspectDrawer({
                 </span>
               </Tooltip>
             )}
+
+            {/* Generic SAVE: commit arbitrary Moorhen edits (waters, rotamers,
+                alt-confs/occupancy…) as the new current_model. No hit assertion
+                — a plain edit isn't a hit. Available whenever a model is loaded.
+                (Merge is the ligand-specific shortcut that also asserts a hit.) */}
+            <Tooltip
+              arrow
+              title={
+                "Save your current Moorhen model edits (deleted waters, " +
+                "rotamers, alt-confs…) as this crystal's current model"
+              }
+            >
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="info"
+                  fullWidth
+                  disabled={merging || !modelMolRef.current}
+                  onClick={() => saveModel(selected)}
+                >
+                  Save model edits
+                </Button>
+              </span>
+            </Tooltip>
 
             {/* Refinement is CRYSTAL-scoped: it acts on the whole-crystal
                 current_model vs the dataset's data, not on this single event.

@@ -51,24 +51,30 @@ def _next_build_dir(dataset: Dataset) -> tuple[Path, str]:
 
 
 @transaction.atomic
-def land_built_model(event: Event, pdb_text: str) -> Artifact:
-    """Persist a client-merged crystal model for ``event``'s dataset.
+def land_built_model(
+    event: Event, pdb_text: str, *, pose_merged: bool = False
+) -> Artifact:
+    """Persist a client-edited crystal model as the dataset's current_model.
 
-    ``pdb_text`` is the merged model the client exported from Coot (after
-    merge_molecules). We version + write it, register an ``origin=built``
-    Artifact (lineage parent = the model that was merged into), repoint
-    ``Dataset.current_model``, and flag the event ``pose_merged=True``.
+    The GENERIC commit primitive: ``pdb_text`` is whatever the client exported
+    from Moorhen — a ligand merge, deleted waters, fixed rotamers, alt-conf /
+    occupancy edits, etc. We version + write it, register an ``origin=built``
+    Artifact (lineage parent = the model edited, so builds accumulate) and
+    repoint ``Dataset.current_model``.
+
+    ``pose_merged`` is set on the event ONLY when the edit was a ligand merge
+    for THIS event (the caller asserts it) — a generic save leaves it untouched
+    (deleting waters doesn't put this event's ligand in the model).
     """
     has_atoms = "ATOM" in pdb_text or "HETATM" in pdb_text
     if not pdb_text or not has_atoms:
         raise BuildError("no atoms in the submitted model")
 
     dataset = event.dataset
-    # Lineage parent: the model that was merged into — the current best
-    # (accumulates: merging successive events builds onto the prior built
-    # model), else the APO input. There are now two STRUCTURE artifacts (apo
-    # input + the reference merged model), so the fallback matches the apo
-    # input explicitly by relpath suffix — NOT the merged reference model.
+    # Lineage parent: the model being edited — the current best (accumulates:
+    # successive edits build onto the prior model), else the APO input. Two
+    # STRUCTURE artifacts now exist (apo input + the reference merged model),
+    # so the fallback matches the apo input by suffix — NOT the reference.
     parent = dataset.current_model or dataset.artifacts.filter(
         kind=Artifact.Kind.STRUCTURE,
         relpath__endswith="-pandda-input.pdb",
@@ -87,7 +93,8 @@ def land_built_model(event: Event, pdb_text: str) -> Artifact:
     )
     dataset.current_model = built
     dataset.save(update_fields=["current_model"])
-    # This event's ligand is now in the model.
-    event.pose_merged = True
-    event.save(update_fields=["pose_merged"])
+    if pose_merged:
+        # This event's ligand is now in the model (a merge, not a save).
+        event.pose_merged = True
+        event.save(update_fields=["pose_merged"])
     return built

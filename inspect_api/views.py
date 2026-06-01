@@ -137,7 +137,10 @@ class EventViewSet(
         request={
             "application/json": {
                 "type": "object",
-                "properties": {"pdb": {"type": "string"}},
+                "properties": {
+                    "pdb": {"type": "string"},
+                    "merge": {"type": "boolean"},
+                },
                 "required": ["pdb"],
             }
         },
@@ -145,27 +148,32 @@ class EventViewSet(
             description="Empty/invalid model, or landing failed."
         )},
     )
-    @action(detail=True, methods=["post"], url_path="build_ligand")
-    def build_ligand(self, request, pk=None):
-        """Land a client-merged crystal model for this event.
+    @action(detail=True, methods=["post"], url_path="commit_model")
+    def commit_model(self, request, pk=None):
+        """Commit a client-edited crystal model as the dataset's current_model.
 
-        The MERGE happens client-side in Moorhen/Coot (merge_molecules); the
-        client POSTs the exported merged ``pdb`` here. We persist it through
-        the contract (DESIGN §2.2 + ligand-merge-client-side note): register an
-        origin=built model, repoint Dataset.current_model, flag pose_merged.
-        Building a ligand IS the hit assertion, so stamp ``hit`` if unreviewed.
-        Returns the updated event (its current_model now reflects the build).
+        The generic build primitive (DESIGN §2.2 + ligand-merge-client-side):
+        the client edits the model in Moorhen/Coot — ligand merge, deleted
+        waters, rotamers, alt-conf/occupancy, etc. — and POSTs the exported
+        model. We persist it (origin=built, repoint Dataset.current_model).
+
+        ``merge=true`` marks this specifically as a ligand merge for THIS event:
+        sets ``pose_merged`` and stamps ``hit`` (building a ligand IS the hit
+        assertion). A generic save (``merge`` absent/false) touches neither —
+        deleting waters or fixing a rotamer is not a hit assertion.
+        Returns the updated event (current_model now reflects the commit).
         """
         event = self.get_object()
         pdb = request.data.get("pdb")
+        is_merge = bool(request.data.get("merge"))
         if not pdb:
             return Response({"detail": "'pdb' is required."}, status=400)
         try:
-            land_built_model(event, pdb)
+            land_built_model(event, pdb, pose_merged=is_merge)
         except BuildError as exc:
             return Response({"detail": str(exc)}, status=400)
-        # Building a ligand IS asserting a hit — record it if not already set.
-        if event.decision == Event.Decision.UNREVIEWED:
+        # A ligand merge IS a hit assertion — stamp it (generic saves don't).
+        if is_merge and event.decision == Event.Decision.UNREVIEWED:
             event.decision = Event.Decision.HIT
             event.inspected_at = timezone.now()
             event.save(update_fields=["decision", "inspected_at"])

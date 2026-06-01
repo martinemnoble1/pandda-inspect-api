@@ -125,7 +125,7 @@ class LandBuiltModelTests(TestCase):
         )
         self.dataset = Dataset.objects.create(project=self.project, dtag="d1")
         # The apo input (start model). buildservice's parent fallback matches
-        # it by the -pandda-input.pdb suffix, so the fixture must use that name.
+        # it by the -pandda-input.pdb suffix, so the fixture uses that name.
         self.struct = Artifact.objects.create(
             dataset=self.dataset, kind=Artifact.Kind.STRUCTURE,
             relpath="d1-pandda-input.pdb", origin=Artifact.Origin.IMPORTED,
@@ -135,7 +135,8 @@ class LandBuiltModelTests(TestCase):
     def test_lands_built_model_and_repoints(self):
         from inspect_api.buildservice import land_built_model
         pdb = "ATOM      1  CA  ALA A   1      0.0  0.0  0.0  1.0  0.0\n"
-        built = land_built_model(self.event, pdb)
+        # merge=True path: a ligand merge for this event sets pose_merged.
+        built = land_built_model(self.event, pdb, pose_merged=True)
         self.assertEqual(built.origin, Artifact.Origin.BUILT)
         self.assertEqual(built.parent_id, self.struct.id)
         self.assertEqual(built.relpath, "builds/1/model.pdb")
@@ -144,6 +145,18 @@ class LandBuiltModelTests(TestCase):
         self.event.refresh_from_db()
         self.assertEqual(self.dataset.current_model_id, built.id)
         self.assertTrue(self.event.pose_merged)
+
+    def test_generic_commit_does_not_set_pose_merged(self):
+        # A generic save (default pose_merged=False) lands the model + repoints
+        # current_model, but must NOT flag the event's pose merged (deleting
+        # waters / fixing a rotamer is not a ligand merge).
+        from inspect_api.buildservice import land_built_model
+        pdb = "ATOM      1  CA  ALA A   1      0.0  0.0  0.0  1.0  0.0\n"
+        built = land_built_model(self.event, pdb)
+        self.dataset.refresh_from_db()
+        self.event.refresh_from_db()
+        self.assertEqual(self.dataset.current_model_id, built.id)
+        self.assertIsNone(self.event.pose_merged)
 
     def test_versions_write_once(self):
         from inspect_api.buildservice import land_built_model
