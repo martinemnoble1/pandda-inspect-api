@@ -376,33 +376,51 @@ export function InspectDrawer({
         const sf = ev.current_sf;
         if (sf && sf.map_columns?.length) {
           for (const col of sf.map_columns) {
-            const mmap = newMap(commandCentre, store);
-            await mmap.loadToCootFromMtzURL(api.artifactUrl(sf), sf.relpath, {
-              F: col.F,
-              PHI: col.PHI,
-              isDifference: col.isDifference,
-              useWeight: false,
-            });
-            const msigma = col.isDifference
-              ? DEFAULT_FOFC_SIGMA
-              : DEFAULT_2FOFC_SIGMA;
-            const mlevel =
-              typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
-                ? msigma * mmap.mapRmsd
-                : msigma;
-            dispatch(addMap(mmap as any));
-            dispatch(
-              setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
-            );
-            loaded.push({
-              map: mmap,
-              molNo: mmap.molNo,
-              label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
-              unit: "sigma",
-              sliderValue: msigma,
-              isDifference: col.isDifference,
-              visible: true,
-            });
+            // Isolate each column load: a missing/misnamed coefficient (e.g. a
+            // refine engine whose declared columns don't match its MTZ) must NOT
+            // abort the whole load and silently empty the map panel ("No maps
+            // loaded" despite the event map being visible). Skip the bad column,
+            // keep the rest.
+            try {
+              const mmap = newMap(commandCentre, store);
+              await mmap.loadToCootFromMtzURL(
+                api.artifactUrl(sf),
+                sf.relpath,
+                {
+                  F: col.F,
+                  PHI: col.PHI,
+                  isDifference: col.isDifference,
+                  useWeight: false,
+                }
+              );
+              const msigma = col.isDifference
+                ? DEFAULT_FOFC_SIGMA
+                : DEFAULT_2FOFC_SIGMA;
+              const mlevel =
+                typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
+                  ? msigma * mmap.mapRmsd
+                  : msigma;
+              dispatch(addMap(mmap as any));
+              dispatch(
+                setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
+              );
+              loaded.push({
+                map: mmap,
+                molNo: mmap.molNo,
+                label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
+                unit: "sigma",
+                sliderValue: msigma,
+                isDifference: col.isDifference,
+                visible: true,
+              });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `Map column ${col.F}/${col.PHI} failed to load from ` +
+                  `${sf.relpath}; skipping.`,
+                err
+              );
+            }
           }
         }
         setMaps(loaded);

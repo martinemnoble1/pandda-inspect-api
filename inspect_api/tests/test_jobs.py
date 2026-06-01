@@ -125,8 +125,10 @@ class RefinementLoopTests(TestCase):
             url = reverse("job-detail", args=[job_id])
             _wait(lambda: self.client.get(url).json(),
                   lambda d: d["status"] != "running")
-        # The servalcat MTZ landed as a refined OUTPUT_MTZ with explicit
-        # (refmac) map columns, and current_sf repointed to it.
+        # The servalcat MTZ landed as a refined OUTPUT_MTZ with explicit map
+        # columns in SERVALCAT's convention (FWT/DELFWT — NOT dimple's
+        # 2FOFCWT/FOFCWT; servalcat writes its own gemmi-native labels), and
+        # current_sf repointed to it.
         mtz = Artifact.objects.get(
             kind=Artifact.Kind.OUTPUT_MTZ, origin=Artifact.Origin.REFINED,
             produced_by_id=job_id,
@@ -134,10 +136,13 @@ class RefinementLoopTests(TestCase):
         self.assertEqual(mtz.relpath, f"jobs/{job_id}/refine.mtz")
         self.assertTrue((self.root / mtz.relpath).is_file())
         self.assertTrue(
-            any(c["F"] == "2FOFCWT" for c in mtz.map_columns)
+            any(c["F"] == "FWT" for c in mtz.map_columns)
         )
         self.assertTrue(
-            any(c.get("isDifference") for c in mtz.map_columns)
+            any(
+                c["F"] == "DELFWT" and c.get("isDifference")
+                for c in mtz.map_columns
+            )
         )
         self.dataset.refresh_from_db()
         self.assertEqual(self.dataset.current_sf_id, mtz.id)
