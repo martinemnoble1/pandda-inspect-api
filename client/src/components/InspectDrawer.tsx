@@ -326,15 +326,18 @@ export function InspectDrawer({
           // BDC correction restores bound-state density toward full occupancy,
           // so these are viewed like a normal 2Fo-Fc map (single positive
           // contour, isDifference=false), NOT an Fo-Fc difference map. Seed from
-          // the per-event optimal_contour when present (the level the fitted
-          // ligand reads best at), else Coot's suggestion, else a fallback. The
+          // Coot's suggestedContourLevel — empirically the level that reads
+          // "about right" for these BAZ2B event maps (~0.8 abs). pandda2's
+          // optimal_contour (~2.4) is a signal-detection threshold, not a
+          // viewing level: it renders too tight as a default. Fall back to
+          // optimal_contour then DEFAULT_EVENT_LEVEL if no suggestion. The
           // slider (absolute, 0–EVENT_LEVEL_MAX) lets the user retune.
           const level =
-            ev.optimal_contour != null && ev.optimal_contour > 0
-              ? (ev.optimal_contour as number)
-              : typeof map.suggestedContourLevel === "number" &&
-                map.suggestedContourLevel > 0
+            typeof map.suggestedContourLevel === "number" &&
+            map.suggestedContourLevel > 0
               ? map.suggestedContourLevel
+              : ev.optimal_contour != null && ev.optimal_contour > 0
+              ? (ev.optimal_contour as number)
               : DEFAULT_EVENT_LEVEL;
           dispatch(addMap(map as any));
           // NB: deliberately NOT setActiveMap here. Making this the active map
@@ -397,6 +400,31 @@ export function InspectDrawer({
           }
         }
         setMaps(loaded);
+
+        // Re-assert our contour levels AFTER MoorhenMapManager mounts. Its mount
+        // effect (intiliaseMap) dispatches its OWN default contourLevel for each
+        // freshly-added map (non-EM non-difference → 1*mapRmsd), which races with
+        // and CLOBBERS the setContourLevel we dispatched synchronously above —
+        // the symptom is a map that renders at Moorhen's default until the slider
+        // is first touched, then "jumps" to our intended level. A macrotask runs
+        // strictly after React flushes that mount effect, so re-dispatching here
+        // wins. (Levels are absolute; mirror onContour's unit handling.)
+        const desired = loaded.map((m) => ({
+          molNo: m.molNo,
+          level:
+            m.unit === "sigma" &&
+            typeof m.map.mapRmsd === "number" &&
+            m.map.mapRmsd > 0
+              ? m.sliderValue * m.map.mapRmsd
+              : m.sliderValue,
+        }));
+        setTimeout(() => {
+          for (const d of desired) {
+            dispatch(
+              setContourLevel({ molNo: d.molNo, contourLevel: d.level })
+            );
+          }
+        }, 0);
 
         // Overlay THIS event's autobuilt candidate pose as its own molecule —
         // only while it's NOT yet merged. pose_merged is now reliable (the apo

@@ -140,11 +140,22 @@ typed wrappers in `client/src/moorhen-shim.ts`:
 - **Default level:** event maps are **BDC-corrected** (bound-state density
   restored toward full occupancy) → viewed like a normal 2Fo-Fc map (single
   positive contour, `isDifference=false`), NOT an Fo-Fc difference map at ±3σ.
-  Seed the event contour (absolute) from the per-event events.yaml "Optimal
-  Contour" when present, else Coot's `suggestedContourLevel`, else
-  `DEFAULT_EVENT_LEVEL = 2.0`. Absolute slider range 0–`EVENT_LEVEL_MAX` (6.0).
-  Model maps default `DEFAULT_2FOFC_SIGMA = 1.5` / `DEFAULT_FOFC_SIGMA = 3.0`,
-  σ slider to `MAP_SIGMA_MAX` (5σ) / `DIFF_SIGMA_MAX` (8σ).
+  Seed the event contour (absolute) from Coot's `suggestedContourLevel` (≈0.8,
+  empirically "about right" for BAZ2B), else optimal_contour, else
+  `DEFAULT_EVENT_LEVEL = 2.0`. NB pandda2's optimal_contour (~2.4) is a
+  signal-detection threshold, NOT a viewing level — it renders too tight as a
+  default. Absolute slider range 0–`EVENT_LEVEL_MAX` (6.0). Model maps default
+  `DEFAULT_2FOFC_SIGMA = 1.5` / `DEFAULT_FOFC_SIGMA = 3.0`, σ slider to
+  `MAP_SIGMA_MAX` (5σ) / `DIFF_SIGMA_MAX` (8σ).
+- **Contour race (cost real time):** `MoorhenMapManager`'s mount `useEffect`
+  (`intiliaseMap`) dispatches its OWN default `setContourLevel` for each freshly
+  added map (non-EM non-difference → `1*mapRmsd`). It runs AFTER the synchronous
+  `setContourLevel` we dispatch post-`addMap`, so it CLOBBERS ours — the map
+  renders at Moorhen's default until the slider is first touched, then "jumps"
+  to our level. Fix: re-assert our levels in a `setTimeout(…, 0)` after
+  `setMaps` (a macrotask runs after React flushes that mount effect, so we win).
+  Keep the synchronous dispatch too — it's what works when re-loading into an
+  already-mounted manager (no mount effect re-fires).
 - Load order: **recentre BEFORE loading the map** so its first contour lands on
   the event.
 
