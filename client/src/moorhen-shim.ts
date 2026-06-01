@@ -99,6 +99,37 @@ export function newMap(
   return new MapCtor(commandCentreRef, store);
 }
 
+// Coot's MTZ column heuristic (auto_read_make_and_draw_maps), wrapped to take a
+// URL. MoorhenMap.autoReadMtz reads the MTZ header and returns one map per
+// detected coefficient set, with isDifference + the chosen F/PHI already set —
+// the canonical, deterministic detection that handles every refmac-family MTZ
+// (dimple 2FOFCWT, servalcat FWT/DELFWT, …). We use this for the model-map MTZ
+// by default; an artifact may still pin columns explicitly to override it.
+// autoReadMtz wants a File, so fetch the bytes and wrap them.
+const MapStatic = _Map as unknown as {
+  autoReadMtz(
+    source: File,
+    commandCentreRef: unknown,
+    store: unknown
+  ): Promise<MoorhenMapLike[]>;
+};
+export async function autoReadMtzFromURL(
+  url: string,
+  filename: string,
+  commandCentreRef: unknown,
+  store: unknown
+): Promise<MoorhenMapLike[]> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${resp.status} fetching ${url}`);
+  const buf = await resp.arrayBuffer();
+  // Name must end in .mtz — autoReadMtz/MtzWrapper key off the extension.
+  const name = filename.toLowerCase().endsWith(".mtz")
+    ? filename
+    : `${filename}.mtz`;
+  const file = new File([buf], name, { type: "application/octet-stream" });
+  return MapStatic.autoReadMtz(file, commandCentreRef, store);
+}
+
 export const setActiveMap = _setActiveMap as (map: unknown) => {
   type: string;
   payload: unknown;

@@ -40,7 +40,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
-from inspect_api.conventions import REFMAC_MAP_COLUMNS
+from inspect_api.conventions import detect_map_columns
 from inspect_api.models import Artifact
 from inspect_api.reconcile import (
     ArtifactSpec,
@@ -266,10 +266,12 @@ class Command(BaseCommand):
             (f"{dtag}-z_map.native.ccp4", Artifact.Kind.OUTPUT_MTZ),
         ):
             if (ddir / fname).exists():
-                # The dimple input MTZ carries refmac map coefficients (its
-                # engine is refmac; verified 2FOFCWT/PH..+FOFCWT/PH..).
+                # DETECT the dimple input MTZ's real map-coefficient columns
+                # with gemmi (ground truth from the file — typically
+                # 2FOFCWT/PH2FOFCWT + FOFCWT/PHFOFCWT, but read it rather than
+                # assume). Non-MTZ artifacts carry no columns.
                 cols = (
-                    REFMAC_MAP_COLUMNS
+                    detect_map_columns(ddir / fname)
                     if kind == Artifact.Kind.DATA_MTZ
                     else []
                 )

@@ -20,7 +20,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .conventions import map_columns_for_tool
+from .conventions import detect_map_columns, map_columns_for_tool
 from .jobs import JobSpec, get_runner
 from .models import Artifact, Dataset, Job
 
@@ -219,10 +219,13 @@ def _land(job: Job, status: dict) -> Job:
             origin=Artifact.Origin.REFINED,
             parent=dataset.current_sf,
             produced_by=job,
-            # Declare the engine's map-coefficient columns explicitly (no Coot
-            # heuristics) — keyed off the tool that produced this MTZ.
-            map_columns=map_columns_for_tool(job.tool),
         )
+        # DETECT the real map-coefficient columns from the landed MTZ with gemmi
+        # (ground truth from the file — robust to producer/version/override),
+        # falling back to the tool's known names only if detection finds none.
+        cols = detect_map_columns(_resolve_path(refined_mtz))
+        refined_mtz.map_columns = cols or map_columns_for_tool(job.tool)
+        refined_mtz.save(update_fields=["map_columns"])
         dataset.current_sf = refined_mtz
     dataset.save(update_fields=["current_model", "current_sf"])
 

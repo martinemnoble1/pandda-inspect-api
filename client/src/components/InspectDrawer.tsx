@@ -35,6 +35,7 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import HomeIcon from "@mui/icons-material/Home";
 import store from "../store";
 import {
+  autoReadMtzFromURL,
   hideMap,
   newMap,
   newMolecule,
@@ -370,17 +371,46 @@ export function InspectDrawer({
 
         // Model-based maps from current_sf (dimple MTZ at first, refined
         // servalcat MTZ after refinement): the 2mFo-DFc + mFo-DFc maps for
-        // judging the CURRENT model, alongside the event map. We pass the
-        // EXPLICIT declared columns (no Coot heuristics — we own the
-        // convention; see map-of-record). Cleaned by clearMaps each switch.
+        // judging the CURRENT model, alongside the event map.
+        //
+        // Columns: HEURISTIC-FIRST. Default to Coot's auto_read_make_and_draw
+        // (autoReadMtzFromURL) — it reads the MTZ header and picks the standard
+        // coefficient pairs for ANY refmac-family file (dimple 2FOFCWT,
+        // servalcat FWT/DELFWT, …), with isDifference detected per map. This is
+        // robust to producer/version drift, which hard-coded names are NOT (and
+        // PanDDA2 doesn't persist its column-override arg anywhere we can read).
+        // An artifact MAY still pin explicit map_columns to OVERRIDE the
+        // heuristic — the escape hatch for a pathological MTZ. Cleaned by
+        // clearMaps each switch.
         const sf = ev.current_sf;
+        // Stage a loaded map (contour seeded in σ → absolute via RMSD) and
+        // register it with the store, sharing the path for both column sources.
+        const stageModelMap = (mmap: MoorhenMapLike, isDiff: boolean) => {
+          const msigma = isDiff ? DEFAULT_FOFC_SIGMA : DEFAULT_2FOFC_SIGMA;
+          const mlevel =
+            typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
+              ? msigma * mmap.mapRmsd
+              : msigma;
+          dispatch(addMap(mmap as any));
+          dispatch(
+            setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
+          );
+          loaded.push({
+            map: mmap,
+            molNo: mmap.molNo,
+            label: isDiff ? "Fo-Fc" : "2Fo-Fc",
+            unit: "sigma",
+            sliderValue: msigma,
+            isDifference: isDiff,
+            visible: true,
+          });
+        };
         if (sf && sf.map_columns?.length) {
+          // Explicit override: caller pinned the columns. Isolate each load so
+          // one bad column can't abort the whole event load (which previously
+          // left an empty panel — "No maps loaded" — with the event map still
+          // on screen).
           for (const col of sf.map_columns) {
-            // Isolate each column load: a missing/misnamed coefficient (e.g. a
-            // refine engine whose declared columns don't match its MTZ) must NOT
-            // abort the whole load and silently empty the map panel ("No maps
-            // loaded" despite the event map being visible). Skip the bad column,
-            // keep the rest.
             try {
               const mmap = newMap(commandCentre, store);
               await mmap.loadToCootFromMtzURL(
@@ -393,26 +423,7 @@ export function InspectDrawer({
                   useWeight: false,
                 }
               );
-              const msigma = col.isDifference
-                ? DEFAULT_FOFC_SIGMA
-                : DEFAULT_2FOFC_SIGMA;
-              const mlevel =
-                typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
-                  ? msigma * mmap.mapRmsd
-                  : msigma;
-              dispatch(addMap(mmap as any));
-              dispatch(
-                setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
-              );
-              loaded.push({
-                map: mmap,
-                molNo: mmap.molNo,
-                label: col.isDifference ? "Fo-Fc" : "2Fo-Fc",
-                unit: "sigma",
-                sliderValue: msigma,
-                isDifference: col.isDifference,
-                visible: true,
-              });
+              stageModelMap(mmap, col.isDifference);
             } catch (err) {
               // eslint-disable-next-line no-console
               console.warn(
@@ -421,6 +432,26 @@ export function InspectDrawer({
                 err
               );
             }
+          }
+        } else if (sf) {
+          // Default: let Coot detect the coefficient columns.
+          try {
+            const autoMaps = await autoReadMtzFromURL(
+              api.artifactUrl(sf),
+              sf.relpath.split("/").pop() || "model.mtz",
+              commandCentre,
+              store
+            );
+            for (const mmap of autoMaps) {
+              stageModelMap(mmap, !!mmap.isDifference);
+            }
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `auto-read of model MTZ ${sf.relpath} failed; ` +
+                `no model maps loaded.`,
+              err
+            );
           }
         }
         setMaps(loaded);
