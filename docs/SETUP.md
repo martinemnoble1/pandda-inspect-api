@@ -9,9 +9,11 @@ How to run this reference, for two audiences:
   loop including dispatching a `giant.quick_refine` refinement. This needs CCP4
   **and** a PanDDA2 conda environment, activated in a specific order (§B.2).
 
-> A third audience — **end users** running a packaged desktop app — is the goal
-> of the Electron binding (ROADMAP #6 / DESIGN §3.1). Until that ships, a "user"
-> is a tester. This doc will grow a User section when the installer exists.
+> A third audience — **end users** running the packaged **Reinspect** desktop
+> app — is now served by signed installers on the
+> [Releases page](../../releases/latest) (the Electron binding, ROADMAP #6 /
+> DESIGN §3.1). A user just downloads, opens, and uses **Import** — no setup
+> from this doc. See [README §1](../README.md#1-run-the-desktop-app).
 
 Companion docs: [README](../README.md) (why), [CLAUDE.md](../CLAUDE.md)
 (engineering *how* / gotchas), [DESIGN](DESIGN-artifacts-and-jobs.md) (the
