@@ -892,9 +892,20 @@ export function InspectDrawer({
         )}
       </Box>
 
-      {/* Bottom: selected-event detail + contour + decision */}
+      {/* Bottom: selected-event detail + contour + decision + actions.
+          maxHeight (not fixed height) so it grows to fit the action buttons
+          (Merge / Refine) instead of pushing them below a 300px fold, but is
+          capped at ~half the drawer so the event list above stays usable; its
+          own scroll is the safety net at very short windows. */}
       <Divider />
-      <Box sx={{ height: 300, flexShrink: 0, p: 1.5, overflow: "auto" }}>
+      <Box
+        sx={{
+          flexShrink: 0,
+          maxHeight: "55%",
+          p: 1.5,
+          overflow: "auto",
+        }}
+      >
         {!selected ? (
           <Typography color="text.secondary" variant="body2">
             Select an event to see details and contour controls.
