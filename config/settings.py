@@ -120,6 +120,6 @@ SPECTACULAR_SETTINGS = {
         "(with mutable inspection decisions), and artifact references derived "
         "from a PanDDA analysis ingested into a transactional store."
     ),
-    "VERSION": "0.1.0",
+    "VERSION": "0.1.1",
     "SERVE_INCLUDE_SCHEMA": False,
 }
