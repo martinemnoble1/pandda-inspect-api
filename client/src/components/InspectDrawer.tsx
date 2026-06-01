@@ -732,6 +732,31 @@ export function InspectDrawer({
   const prevEvent = adjacentEvent(eventOrder, selected, -1);
   const nextEvent = adjacentEvent(eventOrder, selected, +1);
 
+  // Auto-open a group so the user lands ready to click event chips, without an
+  // extra click:
+  //  • on first arrival (nothing expanded yet) → open the first group;
+  //  • whenever the visible set narrows to exactly ONE group (e.g. a filter or
+  //    search that uniquely identifies a dataset) → open that one.
+  // Keyed on the group signature so it fires when the LIST changes, not on every
+  // render — so a deliberate collapse isn't immediately undone (the signature is
+  // unchanged, so we don't re-open). The selected-event effect below still wins
+  // when the user is actively navigating events.
+  const autoOpenSig = useRef<string | null>(null);
+  useEffect(() => {
+    if (groups.length === 0) return;
+    const sig = groups.map((g) => g.key).join("|");
+    const single = groups.length === 1;
+    // Re-open on a genuinely new list (filter/search changed it), or on first
+    // arrival when nothing is open yet.
+    setExpanded((cur) => {
+      const listChanged = autoOpenSig.current !== sig;
+      if (single && listChanged) return groups[0].key;
+      if (cur === false && listChanged) return groups[0].key;
+      return cur;
+    });
+    autoOpenSig.current = sig;
+  }, [groups]);
+
   // Keep the accordion in step with the live event: open the group the
   // selected event belongs to and collapse any other (single-open). This makes
   // the list reflect "where am I" when prev/next crosses a dataset boundary —
