@@ -91,6 +91,11 @@ interface Props {
 // a fallback). See contour-units memory.
 const DEFAULT_EVENT_LEVEL = 2.0; // absolute fallback when no per-event hint
 const EVENT_LEVEL_MAX = 6.0; // absolute slider ceiling for event maps
+// View zoom on event select. Moorhen zoom is a frustum scale (default 1.0,
+// smaller = closer); the 1.0 default frames the whole crystal, too far for a
+// single binding pocket. ~0.35 focuses on the event without clipping its
+// surroundings.
+const EVENT_ZOOM = 0.35;
 // Model-based maps stay in σ (their RMSD is meaningful — full-cell X-ray maps).
 const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
@@ -275,7 +280,8 @@ export function InspectDrawer({
           recentre(
             dispatch,
             glRef as { current: unknown },
-            ev.xyz_centroid as [number, number, number]
+            ev.xyz_centroid as [number, number, number],
+            EVENT_ZOOM
           );
         }
 

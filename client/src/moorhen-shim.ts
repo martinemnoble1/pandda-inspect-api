@@ -16,6 +16,7 @@ import {
   MoorhenMap as _Map,
   setActiveMap as _setActiveMap,
   setOrigin as _setOrigin,
+  setZoom as _setZoom,
   setContourLevel as _setContourLevel,
   showMap as _showMap,
   hideMap as _hideMap,
@@ -140,18 +141,33 @@ export const hideMap = _hideMap as (
 export function recentre(
   dispatch: (action: { type: string }) => void,
   glRef: { current: unknown },
-  xyz: [number, number, number]
+  xyz: [number, number, number],
+  // Optional view zoom. Moorhen's zoom is a frustum scale (default 1.0); SMALLER
+  // = closer. Event sites want a tight focus — the default 1.0 sits too far out
+  // for a single binding pocket. Same dispatch-is-source-of-truth story as
+  // origin: the store `zoom` drives MoorhenWebMG's setZoom effect; we also nudge
+  // glRef so it moves even if that effect is disabled in this build.
+  zoom?: number
 ) {
   const target: [number, number, number] = [-xyz[0], -xyz[1], -xyz[2]];
   dispatch(_setOrigin(target) as { type: string });
+  if (typeof zoom === "number") {
+    dispatch(_setZoom(zoom) as { type: string });
+  }
   const gl = glRef.current as
     | {
         setOrigin?: (o: number[], doDraw?: boolean, dispatch?: boolean) => void;
+        setZoom?: (z: number) => void;
+        drawScene?: () => void;
       }
     | null;
   // Imperative nudge so the camera follows even if the originState useEffect is
   // disabled in this Moorhen build. doDraw=true, dispatch=false (we already did).
   if (typeof gl?.setOrigin === "function") {
     gl.setOrigin(target, true, false);
+  }
+  if (typeof zoom === "number" && typeof gl?.setZoom === "function") {
+    gl.setZoom(zoom);
+    gl.drawScene?.();
   }
 }
