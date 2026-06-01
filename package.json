@@ -32,6 +32,7 @@
     },
     "afterSign": "electron/notarize.js",
     "artifactName": "Reinspect-${version}-${os}-${arch}.${ext}",
+    "icon": "electron/icon.png",
     "mac": {
       "category": "public.app-category.education",
       "target": ["dmg", "zip"],
