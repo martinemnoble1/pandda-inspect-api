@@ -432,15 +432,20 @@ export function InspectDrawer({
               setDatasets((prev) =>
                 prev.map((d) => (d.id === datasetId ? fd : d))
               );
-              // Reload the 3D model only if this crystal is on screen now.
-              if (loadedDtag.current === dtag) {
-                const sel = selectedRef.current;
-                const ev =
-                  fd.events.find((e) => e.id === sel?.id) ?? fd.events[0];
-                if (ev) {
-                  loadedDtag.current = null; // force coords re-pull
-                  loadEventRef.current?.(ev);
-                }
+              // Reload the 3D model ONLY if you're still on the SAME event of
+              // this crystal — reload exactly that event so the refined coords
+              // show. If you've navigated elsewhere (or the event is gone),
+              // leave the view as-is: never fall back to events[0], which used
+              // to dump the view onto event 1 after a refine.
+              const sel = selectedRef.current;
+              const stillHere =
+                loadedDtag.current === dtag &&
+                sel != null &&
+                fd.events.some((e) => e.id === sel.id);
+              if (stillHere) {
+                const ev = fd.events.find((e) => e.id === sel!.id)!;
+                loadedDtag.current = null; // force coords re-pull
+                loadEventRef.current?.(ev);
               }
             }
           } catch {
