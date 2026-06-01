@@ -78,22 +78,32 @@ jobs:
       - name: Install electron deps
         run: npm ci
 
-      - name: Build installers (electron-builder)
+      # macOS build carries the signing/notarization env. The signing creds are
+      # OPTIONAL: when the repo secrets are unset (forks/PRs), electron-builder
+      # produces an UNSIGNED app, and electron/notarize.js no-ops. When they are
+      # set on a trusted build, the app is signed (CSC_LINK = base64 .p12,
+      # CSC_KEY_PASSWORD its password) and notarized (APPLE_* creds).
+      # See packaging/README.md.
+      - name: Build installers — macOS
+        if: runner.os == 'macOS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing + notarization — ALL optional. When the repo
-          # secrets are unset (forks, PRs), these are empty and electron-builder
-          # falls back to an unsigned build (the right-click-Open artifact).
-          # When set on a trusted build, the app is signed with the Developer ID
-          # cert (CSC_LINK = base64 of the .p12, CSC_KEY_PASSWORD its password)
-          # and notarized via notarytool (APPLE_* creds). See packaging/README.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # Notarization self-gates: electron/notarize.js (the afterSign hook)
-        # no-ops unless APPLE_ID is set, so unsigned CI (no secrets) succeeds.
+        run: npx electron-builder --publish never
+
+      # Windows/Linux build deliberately carries NO CSC_* env. An *empty* CSC_LINK
+      # (which is what an unset secret expands to) makes electron-builder on
+      # Windows try to resolve it as a cert path and FAIL ("Env WIN_CSC_LINK is
+      # not correct, cannot resolve …"). Omitting the var entirely is the fix —
+      # these platforms aren't signed yet anyway.
+      - name: Build installers — Windows/Linux
+        if: runner.os != 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --publish never
 
       - name: Upload installers

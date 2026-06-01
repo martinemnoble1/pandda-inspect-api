@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Reinspect — an independent prototype client for reviewing PanDDA events (spawns the frozen Django backend, loads the Moorhen client). Not affiliated with the PanDDA project.",
-  "author": "pandda-inspect contributors",
+  "author": {
+    "name": "Martin Noble",
+    "email": "martin.noble@ncl.ac.uk"
+  },
   "license": "MIT",
   "main": "electron/main.js",
   "scripts": {
@@ -24,13 +27,6 @@
       "electron/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "dist/pandda-inspect-backend",
-        "to": "backend/pandda-inspect-backend",
-        "filter": ["**/*"]
-      }
-    ],
     "directories": {
       "output": "release"
     },
@@ -43,14 +39,33 @@
       "gatekeeperAssess": false,
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.plist",
-      "notarize": false
+      "notarize": false,
+      "extraResources": [
+        {
+          "from": "dist/pandda-inspect-backend",
+          "to": "backend/pandda-inspect-backend"
+        }
+      ]
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": ["nsis", "portable"],
+      "extraResources": [
+        {
+          "from": "dist/pandda-inspect-backend.exe",
+          "to": "backend/pandda-inspect-backend.exe"
+        }
+      ]
     },
     "linux": {
       "category": "Science",
-      "target": ["AppImage", "deb"]
+      "target": ["AppImage", "deb"],
+      "maintainer": "Martin Noble <martin.noble@ncl.ac.uk>",
+      "extraResources": [
+        {
+          "from": "dist/pandda-inspect-backend",
+          "to": "backend/pandda-inspect-backend"
+        }
+      ]
     }
   }
 }
