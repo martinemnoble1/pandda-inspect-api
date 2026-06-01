@@ -182,3 +182,50 @@ class PoseMergedMatchTests(TestCase):
         self.assertIsNone(
             self._cmd()._pose_is_merged(d, "x", "pose.pdb", None)
         )
+
+
+class LandBuiltModelTests(TestCase):
+    """buildservice.land_built_model: persist a client-merged model as an
+    origin=built Artifact, version it, repoint current_model, flag event."""
+
+    def setUp(self):
+        from inspect_api.models import Dataset, Event
+        self.root = Path(tempfile.mkdtemp())
+        self.project = Project.objects.create(
+            name="BP", source_root=str(self.root)
+        )
+        self.dataset = Dataset.objects.create(project=self.project, dtag="d1")
+        self.struct = Artifact.objects.create(
+            dataset=self.dataset, kind=Artifact.Kind.STRUCTURE,
+            relpath="input.pdb", origin=Artifact.Origin.IMPORTED,
+        )
+        self.event = Event.objects.create(dataset=self.dataset, event_num=1)
+
+    def test_lands_built_model_and_repoints(self):
+        from inspect_api.buildservice import land_built_model
+        pdb = "ATOM      1  CA  ALA A   1      0.0  0.0  0.0  1.0  0.0\n"
+        built = land_built_model(self.event, pdb)
+        self.assertEqual(built.origin, Artifact.Origin.BUILT)
+        self.assertEqual(built.parent_id, self.struct.id)
+        self.assertEqual(built.relpath, "builds/1/model.pdb")
+        self.assertTrue((self.root / built.relpath).is_file())
+        self.dataset.refresh_from_db()
+        self.event.refresh_from_db()
+        self.assertEqual(self.dataset.current_model_id, built.id)
+        self.assertTrue(self.event.pose_merged)
+
+    def test_versions_write_once(self):
+        from inspect_api.buildservice import land_built_model
+        pdb = "HETATM    1  C1  LIG A   1      0.0  0.0  0.0  1.0  0.0\n"
+        b1 = land_built_model(self.event, pdb)
+        b2 = land_built_model(self.event, pdb)
+        # New version, parent = the previous current_model (b1), no clobber.
+        self.assertEqual(b1.relpath, "builds/1/model.pdb")
+        self.assertEqual(b2.relpath, "builds/2/model.pdb")
+        self.assertEqual(b2.parent_id, b1.id)
+        self.assertTrue((self.root / b1.relpath).is_file())
+
+    def test_empty_model_rejected(self):
+        from inspect_api.buildservice import BuildError, land_built_model
+        with self.assertRaises(BuildError):
+            land_built_model(self.event, "REMARK no atoms here\n")

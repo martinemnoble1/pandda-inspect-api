@@ -12,6 +12,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
+from .buildservice import BuildError, land_built_model
 from .importer import ImportError_, import_zip
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
@@ -131,6 +132,45 @@ class EventViewSet(
             serializer.save(inspected_at=timezone.now())
         else:
             serializer.save()
+
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {"pdb": {"type": "string"}},
+                "required": ["pdb"],
+            }
+        },
+        responses={200: EventSerializer, 400: OpenApiResponse(
+            description="Empty/invalid model, or landing failed."
+        )},
+    )
+    @action(detail=True, methods=["post"], url_path="build_ligand")
+    def build_ligand(self, request, pk=None):
+        """Land a client-merged crystal model for this event.
+
+        The MERGE happens client-side in Moorhen/Coot (merge_molecules); the
+        client POSTs the exported merged ``pdb`` here. We persist it through
+        the contract (DESIGN §2.2 + ligand-merge-client-side note): register an
+        origin=built model, repoint Dataset.current_model, flag pose_merged.
+        Building a ligand IS the hit assertion, so stamp ``hit`` if unreviewed.
+        Returns the updated event (its current_model now reflects the build).
+        """
+        event = self.get_object()
+        pdb = request.data.get("pdb")
+        if not pdb:
+            return Response({"detail": "'pdb' is required."}, status=400)
+        try:
+            land_built_model(event, pdb)
+        except BuildError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        # Building a ligand IS asserting a hit — record it if not already set.
+        if event.decision == Event.Decision.UNREVIEWED:
+            event.decision = Event.Decision.HIT
+            event.inspected_at = timezone.now()
+            event.save(update_fields=["decision", "inspected_at"])
+        event.refresh_from_db()
+        return Response(self.get_serializer(event).data)
 
 
 class ArtifactViewSet(viewsets.ReadOnlyModelViewSet):

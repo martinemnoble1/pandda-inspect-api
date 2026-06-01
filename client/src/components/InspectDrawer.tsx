@@ -35,6 +35,7 @@ import {
   recentre,
   setContourLevel,
   type MoorhenMapLike,
+  type MoorhenMoleculeLike,
 } from "../moorhen-shim";
 import {
   api,
@@ -108,6 +109,14 @@ export function InspectDrawer({
   const [refineJob, setRefineJob] = useState<Job | null>(null);
   const loadedDtag = useRef<string | null>(null);
   const eventMapRef = useRef<MoorhenMapLike | null>(null);
+  // The per-event autobuilt ligand pose overlaid as its own molecule (a
+  // CANDIDATE proposal, distinct from the merged model). Cleared on every event
+  // switch — unlike the per-crystal model, the pose is event-specific.
+  const poseMolRef = useRef<MoorhenMoleculeLike | null>(null);
+  // The per-crystal model molecule (kept across event switches within a
+  // dataset) — the merge target + what we export to persist a build.
+  const modelMolRef = useRef<MoorhenMoleculeLike | null>(null);
+  const [merging, setMerging] = useState(false);
 
   useEffect(() => {
     if (!projectName) return;
@@ -133,6 +142,16 @@ export function InspectDrawer({
     eventMapRef.current = null;
   }, [dispatch]);
 
+  // Drop the per-event pose overlay (if any). Called on every event switch.
+  const clearPose = useCallback(async () => {
+    const pose = poseMolRef.current;
+    if (pose) {
+      await pose.delete();
+      dispatch(removeMolecule(pose as any));
+      poseMolRef.current = null;
+    }
+  }, [dispatch]);
+
   // Full teardown: maps + molecules. Used when switching dataset.
   const clearLoaded = useCallback(async () => {
     await clearMaps();
@@ -142,6 +161,8 @@ export function InspectDrawer({
       await m.delete();
       dispatch(removeMolecule(m));
     }
+    poseMolRef.current = null; // molecules just bulk-deleted above
+    modelMolRef.current = null;
   }, [dispatch, clearMaps]);
 
   const loadEvent = useCallback(
@@ -193,11 +214,14 @@ export function InspectDrawer({
               await mol.fetchIfDirtyAndDraw("CBs");
             }
             dispatch(addMolecule(mol as any));
+            modelMolRef.current = mol;
           }
         } else {
           // Same dataset, different event: keep the model, but drop the old
-          // event map so maps don't accumulate as you step through events.
+          // event map + pose so they don't accumulate as you step through
+          // events (the pose is per-event; the model is per-crystal).
           await clearMaps();
+          await clearPose();
         }
 
         // Recentre on the event. recentre() dispatches setOrigin (the Redux
@@ -284,12 +308,51 @@ export function InspectDrawer({
           // Surface the level in σ for the slider (which is labelled in σ).
           setContour(sigma);
         }
+
+        // Overlay THIS event's autobuilt ligand pose as its own molecule, so
+        // candidate poses (not in the merged model) are still visible in their
+        // density — and a merged one shows alongside for comparison. The merged
+        // crystal model loads separately above; the pose is event-scoped.
+        const pose = artifactOf(ev, "ligand_pose");
+        if (pose) {
+          const pmol = newMolecule(commandCentre, store);
+          await pmol.loadToCootFromURL(
+            api.artifactUrl(pose),
+            `${ev.dtag}-pose-${ev.event_num}`
+          );
+          // Bond the LIG with its dict (same embedded CIF as the model).
+          const lig = artifactOf(ev, "ligand");
+          if (lig) {
+            try {
+              const cif = await fetch(api.artifactUrl(lig)).then((r) =>
+                r.ok ? r.text() : ""
+              );
+              if (cif) await pmol.addDict(cif);
+            } catch {
+              /* non-fatal: bare-atom pose */
+            }
+          }
+          await pmol.addRepresentation("CBs", "/*/*");
+          pmol.setAtomsDirty(true);
+          await pmol.fetchIfDirtyAndDraw("CBs");
+          dispatch(addMolecule(pmol as any));
+          poseMolRef.current = pmol;
+        }
+
         setSelected(ev);
       } finally {
         setLoadingId(null);
       }
     },
-    [glRef, commandCentre, cootInitialized, dispatch, clearLoaded, clearMaps]
+    [
+      glRef,
+      commandCentre,
+      cootInitialized,
+      dispatch,
+      clearLoaded,
+      clearMaps,
+      clearPose,
+    ]
   );
 
   const onContour = useCallback(
@@ -365,6 +428,55 @@ export function InspectDrawer({
       }
     },
     [refineJob, projectName, loadEvent]
+  );
+
+  // Merge this event's candidate pose INTO the crystal model — client-side in
+  // Coot (merge_molecules), then persist the merged model through the API so
+  // the canonical record updates (no drift). The merge is the hit assertion.
+  const mergePose = useCallback(
+    async (ev: PanddaEvent) => {
+      const cc = commandCentre.current as
+        | (moorhen.CommandCentre & { cootCommand?: any })
+        | null;
+      const model = modelMolRef.current;
+      const pose = poseMolRef.current;
+      if (!cc?.cootCommand || !model || !pose) return;
+      setMerging(true);
+      try {
+        // Coot merges the pose molecule into the model molecule (the prototype
+        // recipe). The pose then lives in the model; drop the standalone pose.
+        await cc.cootCommand(
+          {
+            returnType: "status",
+            command: "merge_molecules",
+            commandArgs: [model.molNo, `${pose.molNo}`],
+          },
+          true
+        );
+        model.setAtomsDirty(true);
+        await model.fetchIfDirtyAndDraw("CBs");
+        await clearPose();
+        // Export the merged model + persist it (origin=built, repoint
+        // current_model, flag pose_merged, auto-Hit).
+        const pdb = await model.getAtoms("pdb");
+        const updated = await api.buildLigand(ev.id, pdb);
+        // Reflect the new decision/pose_merged in local state.
+        setDatasets((prev) =>
+          prev.map((ds) => ({
+            ...ds,
+            events: ds.events.map((e) =>
+              e.id === ev.id ? { ...e, ...updated } : e
+            ),
+          }))
+        );
+        setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
+      } catch {
+        /* surfaced via the merging flag clearing; non-fatal */
+      } finally {
+        setMerging(false);
+      }
+    },
+    [commandCentre, clearPose]
   );
 
   // The dataset whose event is currently live in Moorhen — its ligand sketch
@@ -883,6 +995,39 @@ export function InspectDrawer({
               </ToggleButton>
               <ToggleButton value="ambiguous">Ambiguous</ToggleButton>
             </ToggleButtonGroup>
+
+            {/* Per-event BUILD: merge this event's candidate pose into the
+                crystal model (Coot merge_molecules, then persist). Shown only
+                for a candidate — a merged pose is already in the model. */}
+            {eventPoseState(selected) === "candidate" && (
+              <Tooltip
+                arrow
+                title={
+                  "Merge this event's autobuilt ligand into the crystal " +
+                  "model (and mark the event a hit)"
+                }
+              >
+                <span>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="info"
+                    fullWidth
+                    disabled={merging || !modelMolRef.current}
+                    onClick={() => mergePose(selected)}
+                    startIcon={
+                      merging ? (
+                        <CircularProgress size={14} />
+                      ) : (
+                        <BuildCircleIcon />
+                      )
+                    }
+                  >
+                    {merging ? "Merging…" : "Merge ligand into model"}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
 
             {/* Refinement is CRYSTAL-scoped: it acts on the whole-crystal
                 current_model vs the dataset's data, not on this single event.

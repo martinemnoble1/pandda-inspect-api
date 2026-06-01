@@ -43,6 +43,10 @@ export interface MoorhenMoleculeLike {
   // renders all-single-bonds even with a correct dict.
   setAtomsDirty(state: boolean): void;
   fetchIfDirtyAndDraw(style: string): Promise<unknown>;
+  // Export the molecule's current coordinates as a string (PDB by default) —
+  // used to persist a Coot-merged model back through the API (the build
+  // action: merge in Coot, land the bytes server-side).
+  getAtoms(format?: string): Promise<string>;
 }
 export interface MoorhenMapLike {
   name: string;

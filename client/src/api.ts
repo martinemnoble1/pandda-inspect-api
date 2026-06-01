@@ -128,6 +128,19 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} PATCH event ${eventId}`);
     return r.json() as Promise<PanddaEvent>;
   },
+  // Land a client-merged crystal model for an event (the build action: Coot
+  // merges the pose into the model, the client exports + POSTs the merged PDB;
+  // the backend versions it as origin=built and repoints current_model).
+  async buildLigand(eventId: number, pdb: string) {
+    const r = await fetch(`${BASE}/events/${eventId}/build_ligand/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdb }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `${r.status} build failed`);
+    return body as PanddaEvent;
+  },
   async importZip(name: string, file: File) {
     const form = new FormData();
     form.append("name", name);
