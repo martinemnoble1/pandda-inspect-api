@@ -1247,64 +1247,62 @@ export function InspectDrawer({
               <ToggleButton value="ambiguous">Ambiguous</ToggleButton>
             </ToggleButtonGroup>
 
-            {/* Per-event BUILD: a candidate pose (not yet merged) gets a Merge
-                button. With the apo start-model nothing is pre-merged, so this
-                is simply "has an unmerged autobuilt pose" — no override needed
-                (pose_merged only turns true once you actually merge). */}
-            {eventPoseState(selected) === "candidate" && (
+            {/* BUILD/SAVE actions, sharing one row when both apply: a candidate
+                pose (not yet merged) gets the Merge button alongside Save;
+                otherwise Save is alone (full width). Merge = ligand-specific
+                shortcut that also asserts a hit; Save = commit any Moorhen edit
+                (waters, rotamers, alt-confs/occupancy…), no hit assertion. */}
+            <Stack direction="row" spacing={1}>
+              {eventPoseState(selected) === "candidate" && (
+                <Tooltip
+                  arrow
+                  title={
+                    "Merge this event's autobuilt ligand into the crystal " +
+                    "model (and mark the event a hit)"
+                  }
+                >
+                  <span style={{ flex: 1 }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="info"
+                      fullWidth
+                      disabled={merging || !modelMolRef.current}
+                      onClick={() => mergePose(selected)}
+                      startIcon={
+                        merging ? (
+                          <CircularProgress size={14} />
+                        ) : (
+                          <BuildCircleIcon />
+                        )
+                      }
+                    >
+                      {merging ? "Merging…" : "Merge ligand"}
+                    </Button>
+                  </span>
+                </Tooltip>
+              )}
               <Tooltip
                 arrow
                 title={
-                  "Merge this event's autobuilt ligand into the crystal " +
-                  "model (and mark the event a hit)"
+                  "Save your current Moorhen model edits (deleted waters, " +
+                  "rotamers, alt-confs…) as this crystal's current model"
                 }
               >
-                <span>
+                <span style={{ flex: 1 }}>
                   <Button
                     size="small"
-                    variant="contained"
+                    variant="outlined"
                     color="info"
                     fullWidth
                     disabled={merging || !modelMolRef.current}
-                    onClick={() => mergePose(selected)}
-                    startIcon={
-                      merging ? (
-                        <CircularProgress size={14} />
-                      ) : (
-                        <BuildCircleIcon />
-                      )
-                    }
+                    onClick={() => saveModel(selected)}
                   >
-                    {merging ? "Merging…" : "Merge ligand into model"}
+                    Save model edits
                   </Button>
                 </span>
               </Tooltip>
-            )}
-
-            {/* Generic SAVE: commit arbitrary Moorhen edits (waters, rotamers,
-                alt-confs/occupancy…) as the new current_model. No hit assertion
-                — a plain edit isn't a hit. Available whenever a model is loaded.
-                (Merge is the ligand-specific shortcut that also asserts a hit.) */}
-            <Tooltip
-              arrow
-              title={
-                "Save your current Moorhen model edits (deleted waters, " +
-                "rotamers, alt-confs…) as this crystal's current model"
-              }
-            >
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  color="info"
-                  fullWidth
-                  disabled={merging || !modelMolRef.current}
-                  onClick={() => saveModel(selected)}
-                >
-                  Save model edits
-                </Button>
-              </span>
-            </Tooltip>
+            </Stack>
 
             {/* Refinement is CRYSTAL-scoped: it acts on the whole-crystal
                 current_model vs the dataset's data, not on this single event.
