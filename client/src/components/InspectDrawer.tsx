@@ -103,10 +103,12 @@ export function InspectDrawer({
   const [contour, setContour] = useState(DEFAULT_EVENT_SIGMA);
   // Refinement is CRYSTAL-scoped (acts on the dataset's current_model vs its
   // MTZ; legacy pandda.inspect + DESIGN §1.2). refineAvail gates the action on
-  // the CCP4 probe; refineJob tracks the live job for status display.
+  // the CCP4 probe. Jobs are tracked PER DATASET (not per selected event) so a
+  // refinement is non-modal background work: submit, then navigate/inspect/
+  // refine other crystals freely while it runs. Keyed by dataset id.
   const [refineAvail, setRefineAvail] =
     useState<RefineAvailability | null>(null);
-  const [refineJob, setRefineJob] = useState<Job | null>(null);
+  const [jobsByDataset, setJobsByDataset] = useState<Record<number, Job>>({});
   const loadedDtag = useRef<string | null>(null);
   const eventMapRef = useRef<MoorhenMapLike | null>(null);
   // The per-event autobuilt ligand pose overlaid as its own molecule (a
@@ -117,6 +119,12 @@ export function InspectDrawer({
   // dataset) — the merge target + what we export to persist a build.
   const modelMolRef = useRef<MoorhenMoleculeLike | null>(null);
   const [merging, setMerging] = useState(false);
+  // Live mirrors of selection + loadEvent so a detached background poll (a
+  // refinement landing later, after you've navigated away) reads CURRENT
+  // values, not the stale closure from when it was submitted.
+  const selectedRef = useRef<PanddaEvent | null>(null);
+  selectedRef.current = selected;
+  const loadEventRef = useRef<((ev: PanddaEvent) => void) | null>(null);
 
   useEffect(() => {
     if (!projectName) return;
@@ -354,6 +362,7 @@ export function InspectDrawer({
       clearPose,
     ]
   );
+  loadEventRef.current = loadEvent;
 
   const onContour = useCallback(
     (_: Event, v: number | number[]) => {
@@ -390,44 +399,80 @@ export function InspectDrawer({
     []
   );
 
-  // Refine the WHOLE CRYSTAL: dispatch a servalcat Job on the dataset's
-  // current_model vs its MTZ, poll to completion, then reload so the refined
-  // model (the new current_model) is what's shown. Crystal-scoped by design —
-  // events contribute ligands to this one model; you don't refine an event.
-  const refineCrystal = useCallback(
-    async (ev: PanddaEvent) => {
-      if (refineJob && refineJob.status === "running") return;
-      try {
-        let job = await api.submitRefine(ev.dataset);
-        setRefineJob(job);
-        // Poll until it leaves running (getJob also lands the artifact server
-        // side on first success). Cap the wait so a hung job doesn't poll
-        // forever.
-        for (let i = 0; i < 600 && job.status === "running"; i++) {
-          await new Promise((r) => setTimeout(r, 2000));
-          job = await api.getJob(job.id);
-          setRefineJob(job);
+  // Refine the WHOLE CRYSTAL — NON-MODAL. Submit a servalcat Job for this
+  // dataset, record it in jobsByDataset, and poll in the BACKGROUND. The submit
+  // returns immediately so you can navigate / inspect / refine other crystals
+  // while it runs; status is shown per-dataset (header chip + button). When the
+  // job lands, that dataset's events are refreshed in place, and the live model
+  // is reloaded ONLY if you're currently viewing that crystal (refs, not stale
+  // closure). Crystal-scoped: events feed this one model; you don't refine one.
+  const pollRefineJob = useCallback(
+    async (datasetId: number, dtag: string, jobId: number) => {
+      for (let i = 0; i < 600; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        let job: Job;
+        try {
+          job = await api.getJob(jobId);
+        } catch {
+          continue; // transient; keep polling
         }
+        setJobsByDataset((m) => ({ ...m, [datasetId]: job }));
+        if (job.status === "running") continue;
         if (job.status === "succeeded") {
-          // Re-fetch datasets so the dataset's current_model now points at the
-          // refined model, then force a model reload of the live event.
-          const fresh = await api.listDatasets(projectName);
-          setDatasets(fresh.results);
-          const reloaded = fresh.results
-            .flatMap((d) => d.events)
-            .find((e) => e.id === ev.id);
-          if (reloaded) {
-            loadedDtag.current = null; // force loadEvent to re-pull coords
-            await loadEvent(reloaded);
+          // current_model now points at the refined model — refresh this
+          // dataset's rows in place (not the whole project).
+          try {
+            const fresh = await api.listDatasets(projectName);
+            const fd = fresh.results.find((d) => d.id === datasetId);
+            if (fd) {
+              setDatasets((prev) =>
+                prev.map((d) => (d.id === datasetId ? fd : d))
+              );
+              // Reload the 3D model only if this crystal is on screen now.
+              if (loadedDtag.current === dtag) {
+                const sel = selectedRef.current;
+                const ev =
+                  fd.events.find((e) => e.id === sel?.id) ?? fd.events[0];
+                if (ev) {
+                  loadedDtag.current = null; // force coords re-pull
+                  loadEventRef.current?.(ev);
+                }
+              }
+            }
+          } catch {
+            /* leave status succeeded; next nav re-fetches */
           }
         }
-      } catch {
-        setRefineJob((j) =>
-          j ? { ...j, status: "failed" } : j
-        );
+        return; // terminal (succeeded/failed) — stop polling
       }
     },
-    [refineJob, projectName, loadEvent]
+    [projectName]
+  );
+
+  const refineCrystal = useCallback(
+    (ev: PanddaEvent) => {
+      const existing = jobsByDataset[ev.dataset];
+      if (existing && existing.status === "running") return;
+      api
+        .submitRefine(ev.dataset)
+        .then((job) => {
+          setJobsByDataset((m) => ({ ...m, [ev.dataset]: job }));
+          pollRefineJob(ev.dataset, ev.dtag, job.id);
+        })
+        .catch(() => {
+          // Surface a synthetic failed status for this dataset.
+          setJobsByDataset((m) => ({
+            ...m,
+            [ev.dataset]: {
+              id: -1, tool: "servalcat", dataset: ev.dataset, event: null,
+              status: "failed", output_artifact: null,
+              output_artifact_url: null, log_relpath: "",
+              created_at: "", finished_at: null,
+            },
+          }));
+        });
+    },
+    [jobsByDataset, pollRefineJob]
   );
 
   // Merge this event's candidate pose INTO the crystal model — client-side in
@@ -712,6 +757,46 @@ export function InspectDrawer({
                               />
                             </Tooltip>
                           )}
+                          {(() => {
+                            // Per-crystal refine status — visible here even
+                            // while you're inspecting another crystal's events
+                            // (refinement is non-modal background work).
+                            const j = g.dataset
+                              ? jobsByDataset[g.dataset.id]
+                              : undefined;
+                            if (!j) return null;
+                            if (j.status === "running") {
+                              return (
+                                <Chip
+                                  size="small"
+                                  color="warning"
+                                  icon={<CircularProgress size={12} />}
+                                  label="refining"
+                                />
+                              );
+                            }
+                            if (j.status === "succeeded") {
+                              return (
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                  label="refined"
+                                />
+                              );
+                            }
+                            if (j.status === "failed") {
+                              return (
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  color="error"
+                                  label="refine failed"
+                                />
+                              );
+                            }
+                            return null;
+                          })()}
                           {nHits > 0 && (
                             <Chip
                               size="small"
@@ -1044,52 +1129,61 @@ export function InspectDrawer({
                 current_model vs the dataset's data, not on this single event.
                 Labelled with the dtag to make that explicit. */}
             <Divider sx={{ my: 0.5 }} />
-            <Tooltip
-              arrow
-              title={
-                refineAvail && !refineAvail.available
-                  ? refineAvail.reason ||
-                    "Refinement environment not available"
-                  : "Refine the whole-crystal model against this dataset's " +
-                    "data (servalcat). The refined model becomes current."
-              }
-            >
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  fullWidth
-                  disabled={
-                    !refineAvail?.available ||
-                    refineJob?.status === "running"
-                  }
-                  onClick={() => refineCrystal(selected)}
-                  startIcon={
-                    refineJob?.status === "running" ? (
-                      <CircularProgress size={14} />
-                    ) : undefined
-                  }
-                >
-                  {refineJob?.status === "running"
-                    ? "Refining…"
-                    : `Refine crystal ${selected.dtag}`}
-                </Button>
-              </span>
-            </Tooltip>
-            {refineJob && refineJob.status !== "running" && (
-              <Typography
-                variant="caption"
-                color={
-                  refineJob.status === "succeeded"
-                    ? "success.main"
-                    : "error.main"
-                }
-              >
-                {refineJob.status === "succeeded"
-                  ? "Refinement complete — model updated."
-                  : "Refinement failed (see server log)."}
-              </Typography>
-            )}
+            {(() => {
+              // This crystal's refine job (per-dataset, non-modal) — may be
+              // running even if you navigated here from elsewhere.
+              const selJob = jobsByDataset[selected.dataset];
+              const running = selJob?.status === "running";
+              return (
+                <>
+                  <Tooltip
+                    arrow
+                    title={
+                      refineAvail && !refineAvail.available
+                        ? refineAvail.reason ||
+                          "Refinement environment not available"
+                        : "Refine the whole-crystal model against this " +
+                          "dataset's data (servalcat). Runs in the " +
+                          "background — you can inspect other crystals " +
+                          "meanwhile. The refined model becomes current."
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        fullWidth
+                        disabled={!refineAvail?.available || running}
+                        onClick={() => refineCrystal(selected)}
+                        startIcon={
+                          running ? (
+                            <CircularProgress size={14} />
+                          ) : undefined
+                        }
+                      >
+                        {running
+                          ? "Refining…"
+                          : `Refine crystal ${selected.dtag}`}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  {selJob && selJob.status !== "running" && (
+                    <Typography
+                      variant="caption"
+                      color={
+                        selJob.status === "succeeded"
+                          ? "success.main"
+                          : "error.main"
+                      }
+                    >
+                      {selJob.status === "succeeded"
+                        ? "Refinement complete — model updated."
+                        : "Refinement failed (see server log)."}
+                    </Typography>
+                  )}
+                </>
+              );
+            })()}
           </Stack>
         )}
       </Box>
