@@ -53,7 +53,8 @@ copies) under **Settings → Data folder**.
 
 ## 2. Develop from source
 
-**Prerequisites:** Python 3.12+ (developed on 3.14) · Node 20+ (developed on 24).
+**Prerequisites:** Python 3.11–3.12 (Django 4.2 LTS does not support 3.13+; CI
+runs 3.12) · Node 20+ (developed on 24).
 Full, audience-specific setup is in **[docs/SETUP.md](docs/SETUP.md)**; the
 short version:
 

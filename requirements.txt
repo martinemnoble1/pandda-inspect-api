@@ -1,4 +1,10 @@
-Django>=5.0,<6.0
+# Pinned to the 4.2 LTS line to MATCH the Materia/CCP4i2 host this API is
+# deployed into (its server runs Django 4.2) and to sit inside the
+# ``ccp4i2-api`` (>=4.2,<6.0) range — see requirements-cloud.txt. The code uses
+# no Django-5-only APIs, so this is purely a host-alignment pin, not a downgrade
+# forced by features. NB 4.2 supports Python 3.8–3.12 (3.13 on recent patches),
+# NOT 3.14 — develop/run on 3.12 (the CI version).
+Django>=4.2,<4.3
 djangorestframework>=3.15
 drf-spectacular>=0.27
 django-cors-headers>=4.4
@@ -8,3 +14,7 @@ python-dotenv>=1.0
 gemmi>=0.6
 # PanDDA2 events.yaml parsing in ingest_pandda2.
 PyYAML>=6.0
+
+# Cloud-only extras (CCP4i2 auth + Azure Blob storage) are opt-in and live in
+# requirements-cloud.txt — deliberately NOT installed for the desktop app or
+# the test suite. See that file and docs/MATERIA_INTEGRATION.md.

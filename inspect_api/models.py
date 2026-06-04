@@ -164,6 +164,14 @@ class Event(models.Model):
     confidence = models.CharField(max_length=32, blank=True, default="")
     comment = models.TextField(blank=True, default="")
     inspected_by = models.CharField(max_length=255, blank=True, default="")
+    # The authenticated curator's Azure AD object id (``oid`` claim, falling
+    # back to ``sub``), stamped server-side when cloud auth is on. Nullable and
+    # a no-op for the no-auth desktop flow and for all pre-auth rows, whose
+    # ``inspected_by`` stays a free-text string with a null oid here (matches
+    # the §12 reconciliation recommendation: bind NEW decisions to AAD
+    # identities without rewriting historical ones). See identity stamping in
+    # views.EventViewSet and docs/MATERIA_INTEGRATION.md R3.
+    inspected_by_oid = models.CharField(max_length=255, null=True, blank=True)
     inspected_at = models.DateTimeField(null=True, blank=True)
 
     # The best model for THIS event's density — a ligand built into the local

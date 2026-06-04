@@ -1,0 +1,31 @@
+# Opt-in dependencies for a CLOUD deployment (auth + object storage).
+#
+# NOT needed for the standalone Electron desktop app (the principal delivery
+# mode) or the hermetic ``manage.py test`` run. Install these only when you are
+# turning on a cloud feature flag:
+#   * PANDDA_AUTH_BACKEND=ccp4i2  -> needs ccp4i2-api
+#   * PANDDA_DATA_STORE=azure     -> needs azure-storage-blob
+#
+#   pip install -r requirements.txt -r requirements-cloud.txt
+#
+# After installing, sanity-check the version fit against the running
+# Django / DRF / Python with:
+#   python manage.py check_ccp4i2
+
+# Lets ``python manage.py check_ccp4i2`` actually verify version RANGES (not
+# just report versions) — it parses ccp4i2-api's declared specifiers. Tiny,
+# pure-Python; usually already present transitively.
+packaging>=21
+
+# Shared CCP4i2 auth contract: the Azure-AD-JWT / local-session / dev-admin
+# middleware and the matching DRF authentication class. 0.3.1 relaxed its
+# Django pin to >=4.2,<6.0, so it co-installs cleanly alongside our Django 4.2
+# (see requirements.txt). No --no-deps hack needed.
+ccp4i2-api>=0.3.1
+
+# Azure Blob Storage backend for the DataStore seam (storage.AzureBlobStore).
+# Pinned to the line the Materia/CCP4i2 host ships
+# (ccp4i2/server/requirements-azure.txt: azure-storage-blob==12.26.0) so the
+# SDK matches the deployment target. Imported lazily, so the base install never
+# needs it.
+azure-storage-blob>=12.26,<13

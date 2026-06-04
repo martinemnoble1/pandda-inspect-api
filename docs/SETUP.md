@@ -25,7 +25,7 @@ artifact/job/binding design), [ROADMAP](ROADMAP.md) (what's next).
 
 ### A.1 Prerequisites
 
-- Python 3.12+ (developed on 3.14)
+- Python 3.11–3.12 (Django 4.2 LTS does not support 3.13+; CI runs 3.12)
 - Node 20+ (developed on 24) for the client
 
 ### A.2 Backend

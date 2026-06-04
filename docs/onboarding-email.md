@@ -35,7 +35,7 @@ enough along to be worth a look, and I'd love your eyes on it.
 
 **2. Run from source** (if you want to hack on it):
 
-  - Requirements: **Python 3.12+** and **Node 20+**.
+  - Requirements: **Python 3.11–3.12** (Django 4.2 LTS) and **Node 20+**.
   - `git clone` the repo, then follow the README's *Develop from source*
     section (venv + `pip install -r requirements.txt`, then `npm install` in
     `client/`). Full detail in `docs/SETUP.md`.

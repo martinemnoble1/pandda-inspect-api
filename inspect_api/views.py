@@ -11,6 +11,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .buildservice import BuildError, land_built_model
+from .identity import identity_from_request
 from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
@@ -198,7 +199,15 @@ class EventViewSet(
 
     def perform_update(self, serializer):
         if "decision" in serializer.validated_data:
-            serializer.save(inspected_at=timezone.now())
+            extra = {"inspected_at": timezone.now()}
+            # When cloud auth is on, bind the decision to the authenticated
+            # curator (overriding any client-supplied inspected_by). With auth
+            # off this is None, so the client-supplied value stands and the oid
+            # stays null — the unchanged desktop behaviour.
+            ident = identity_from_request(self.request)
+            if ident is not None:
+                extra["inspected_by"], extra["inspected_by_oid"] = ident
+            serializer.save(**extra)
         else:
             serializer.save()
 
@@ -245,7 +254,12 @@ class EventViewSet(
         if is_merge and event.decision == Event.Decision.UNREVIEWED:
             event.decision = Event.Decision.HIT
             event.inspected_at = timezone.now()
-            event.save(update_fields=["decision", "inspected_at"])
+            fields = ["decision", "inspected_at"]
+            ident = identity_from_request(request)
+            if ident is not None:
+                event.inspected_by, event.inspected_by_oid = ident
+                fields += ["inspected_by", "inspected_by_oid"]
+            event.save(update_fields=fields)
         event.refresh_from_db()
         return Response(self.get_serializer(event).data)
 
