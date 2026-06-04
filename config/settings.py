@@ -123,3 +123,52 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.1",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# --- Optional cloud auth (opt-in, OFF by default) -------------------------
+# PRINCIPAL DELIVERY MODE PROTECTION: the standalone Electron desktop app never
+# sets ``PANDDA_AUTH_BACKEND`` (it injects only PANDDA_* env at spawn — see
+# electron/main.js), so with this unset the block below is inert and
+# INSTALLED_APPS / MIDDLEWARE / REST_FRAMEWORK above are exactly as shipped.
+# Nothing here can challenge the desktop client, which sends no token.
+#
+# When ``PANDDA_AUTH_BACKEND=ccp4i2`` we layer in the shared CCP4i2 auth
+# contract (the opt-in ``ccp4i2-api`` package; see requirements-cloud.txt):
+# exactly ONE auth middleware is selected by deployment shape and a DRF auth
+# class surfaces ``request.user``. We deliberately set NO global
+# ``IsAuthenticated`` — enforcement, when wanted, comes from the active
+# middleware itself (each returns its own 401). See docs/MATERIA_INTEGRATION.md
+# R2/R3 and the ccp4i2_api middleware docstrings.
+PANDDA_AUTH_BACKEND = os.environ.get("PANDDA_AUTH_BACKEND", "").lower()
+
+if PANDDA_AUTH_BACKEND == "ccp4i2":
+    # contrib.auth backs the middleware's get_user_model(); added ONLY on this
+    # opt-in path so the desktop build's apps + migrations stay unchanged.
+    if "django.contrib.auth" not in INSTALLED_APPS:
+        INSTALLED_APPS.append("django.contrib.auth")
+
+    # Select exactly one auth middleware by deployment shape, mirroring the
+    # CCP4i2 settings module's own order (see ccp4i2_api.middleware.dev_admin).
+    # Selecting one — not listing all three — avoids a later active middleware
+    # clobbering the request.user an earlier one set.
+    if os.environ.get("CCP4I2_REQUIRE_AUTH", "").lower() in (
+        "true", "1", "yes",
+    ):
+        _auth_middleware = "ccp4i2_api.middleware.AzureADAuthMiddleware"
+    elif os.environ.get("CCP4I2_LOCAL_SESSION_TOKEN"):
+        _auth_middleware = "ccp4i2_api.middleware.LocalSessionAuthMiddleware"
+    elif DEBUG:
+        _auth_middleware = "ccp4i2_api.middleware.DevAdminMiddleware"
+    else:
+        # Production-shaped deploy with no auth env set: no middleware, so
+        # requests stay unauthenticated (AllowAny) rather than auto-creating a
+        # superuser. Strictly the safe fallback.
+        _auth_middleware = None
+    if _auth_middleware:
+        MIDDLEWARE = MIDDLEWARE + [_auth_middleware]
+
+    # Surface request.user to DRF. The auth class trusts ONLY users our
+    # middleware set (via REQUEST_FLAG_ATTR), so it cannot be spoofed.
+    # DEFAULT_PERMISSION_CLASSES stays empty (AllowAny) — no global enforcement.
+    REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] = [
+        "ccp4i2_api.drf.AzureADAuthentication"
+    ]

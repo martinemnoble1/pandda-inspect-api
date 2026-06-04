@@ -95,6 +95,7 @@ class EventSerializer(serializers.ModelSerializer):
             "confidence",
             "comment",
             "inspected_by",
+            "inspected_by_oid",
             "inspected_at",
             "artifacts",
             "current_model",
@@ -119,6 +120,10 @@ class EventSerializer(serializers.ModelSerializer):
             "xyz_centroid",
             "xyz_peak",
             "inspected_at",
+            # Server-stamped from the authenticated AAD identity; never accepted
+            # from the client (the string ``inspected_by`` stays client-settable
+            # for the no-auth desktop flow).
+            "inspected_by_oid",
         ]
 
 
