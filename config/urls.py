@@ -4,7 +4,11 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
+from inspect_api.views import healthz
+
 urlpatterns = [
+    # Platform liveness/readiness probe (auth-exempt, no /api prefix).
+    path("healthz", healthz, name="healthz"),
     path("api/v1/", include("inspect_api.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(

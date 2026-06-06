@@ -1,8 +1,8 @@
 import tempfile
 from pathlib import Path
 
-from django.db import models
-from django.http import FileResponse, Http404, HttpResponse
+from django.db import connection, models
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import mixins, viewsets
@@ -30,6 +30,23 @@ from .serializers import (
 )
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def healthz(request):
+    """Liveness/readiness probe for the container platform.
+
+    Checks DB connectivity (the one external dependency that makes the app
+    'ready'); 200 ``{"status": "ok"}`` when reachable, 503 otherwise. A plain
+    Django view, deliberately auth-free — it is one of the paths the ccp4i2
+    auth middleware exempts, so it answers even when auth is enforced. Wired at
+    both ``/healthz`` (the platform probe) and ``/api/v1/health/`` (clients).
+    """
+    try:
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1")
+    except Exception:  # noqa: BLE001 - any DB error means not-ready
+        return JsonResponse({"status": "unavailable"}, status=503)
+    return JsonResponse({"status": "ok"})
 
 
 def _is_local_request(request) -> bool:

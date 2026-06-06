@@ -8,7 +8,8 @@ gunicorn). Electron's main process will spawn this binary and point a
 BrowserWindow at it.
 
 Run frozen: ``./server`` (PyInstaller onefile), or from source
-``python -m packaging.server_main``. Env: PANDDA_PORT (default 8000),
+``python packaging/server_main.py`` (run by PATH, not ``-m`` — the pip
+``packaging`` library would shadow this dir). Env: PANDDA_PORT (default 8000),
 PANDDA_DB_DIR (where the SQLite file + data live; default a per-user
 app-data dir — NOT inside the read-only frozen bundle).
 """
@@ -58,7 +59,11 @@ class _SpaStaticApp:
 
     def __call__(self, environ, start_response):
         path = environ.get("PATH_INFO", "/")
-        if path.startswith("/api/") or path == "/api":
+        # /healthz is a Django route (the platform readiness probe) and must
+        # NOT be swallowed by the SPA fallback — without this it would serve
+        # index.html (a hollow 200 that ignores DB health, and the only
+        # auth-exempt probe path). /api/* already routes to Django.
+        if path.startswith("/api/") or path == "/api" or path == "/healthz":
             return self._wrap_django(environ, start_response)
         return self._serve_static(path, start_response)
 
@@ -172,14 +177,18 @@ def main() -> int:
         client_note = "client: NOT BUILT (serving /api only)"
 
     port = int(os.environ.get("PANDDA_PORT", "8000"))
+    # Loopback by default — the desktop/Electron binding binds 127.0.0.1 and
+    # nothing changes for it. A container sets PANDDA_HOST=0.0.0.0 to accept
+    # the platform's ingress. See docs/CLOUD_DEPLOYMENT.md.
+    host = os.environ.get("PANDDA_HOST", "127.0.0.1")
     from waitress import serve
 
     sys.stderr.write(
-        f"[pandda-inspect] backend up on http://127.0.0.1:{port}  "
+        f"[pandda-inspect] backend up on http://{host}:{port}  "
         f"(data: {data_dir}; {client_note})\n"
     )
     sys.stderr.flush()
-    serve(app, host="127.0.0.1", port=port, threads=8)
+    serve(app, host=host, port=port, threads=8)
     return 0
 
 

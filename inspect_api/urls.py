@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -11,4 +12,6 @@ router.register("shells", views.ShellViewSet, basename="shell")
 router.register("jobs", views.JobViewSet, basename="job")
 router.register("runs", views.RunViewSet, basename="run")
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("health/", views.healthz, name="health"),
+]
