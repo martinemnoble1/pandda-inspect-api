@@ -1,0 +1,167 @@
+# DRAFT — design proposal, NOT the generated contract.
+#
+# This is a hand-authored stub of the run-lifecycle entry point for Materia to
+# react to (see docs/RUN_LIFECYCLE.md). The CANONICAL schema will be GENERATED
+# by drf-spectacular from the DRF implementation once the shape is ratified
+# both ways — this repo is contract-first, so the YAML below is a sketch, not
+# the source of truth. Lint/import it to evaluate the contract shape.
+openapi: 3.1.0
+info:
+  title: pandda.inspect — run lifecycle (DRAFT)
+  version: 0.0.0-draft
+  description: >
+    Reinspect-owned PanDDA run lifecycle: trigger, monitor, ingest, review.
+    Materia POSTs a run-request and redirects the user to `ui_url`.
+
+paths:
+  /runs/:
+    post:
+      operationId: createRun
+      summary: Trigger a PanDDA run on an exported, share-resident input group.
+      description: >
+        Idempotent on `sha256(project ":" group ":" input_hash)`: a duplicate
+        request returns the existing run with 200 instead of creating a new one.
+        An explicit retry (`retry_of` set) is always a new run and is never
+        deduped against its parent. The `project` slug is resolved to a Reinspect
+        Project by `external_id`, get-or-created on first run.
+      security:
+        - bearerAuth: []   # on-behalf-of the human (forwarded by Materia's proxy)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunRequest' }
+      responses:
+        '201':
+          description: New run created and queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCreated' }
+        '200':
+          description: Idempotent hit — the run for this key already exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCreated' }
+        '400': { description: Malformed request (missing project/group/share_path). }
+        '401': { description: Unauthenticated (no valid bearer token). }
+        '404': { description: '`retry_of` references an unknown run.' }
+
+  /runs/{run_id}/:
+    get:
+      operationId: getRun
+      summary: Poll a run's status, classified failure, and log pointer.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '404': { description: Unknown run. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RunRequest:
+      type: object
+      required: [project, group, share_path]
+      properties:
+        project:
+          type: string
+          description: Materia's stable project slug (stored as Project.external_id).
+          example: CDK4CyclinD1
+        group:
+          type: string
+          description: Sub-batch label within the project.
+          example: fragment-screen-2026
+        share_path:
+          type: string
+          description: >
+            Input dir on the shared Azure Files mount (unzipped export_pandda
+            output). Becomes the ingest source_root.
+          example: /mnt/projects/CDK4CyclinD1/pandda_inputs/fragment-screen-2026
+        input_hash:
+          type: string
+          description: >
+            Manifest-derived content hash of the inputs; combined with
+            project+group into the idempotency key. Cheap to compute during
+            export_pandda.
+          example: sha256:9f86d0818...
+        sizing_hint:
+          $ref: '#/components/schemas/SizingHint'
+        retry_of:
+          type: [string, 'null']
+          description: >
+            A prior run_id this request explicitly retries (e.g. after OOM).
+            Sets parent_run; never deduped against the parent. Null for fresh runs.
+          default: null
+
+    SizingHint:
+      type: object
+      description: Abstract resource hints. Reinspect maps these to a SKU internally.
+      properties:
+        datasets: { type: integer, example: 120 }
+        cell_volume_class:
+          type: string
+          enum: [small, medium, large]
+          example: large
+
+    RunCreated:
+      type: object
+      required: [run_id, ui_url, status]
+      properties:
+        run_id: { type: string, example: run-2026-06-06-001 }
+        ui_url:
+          type: string
+          format: uri
+          description: Reinspect-constructed; Materia redirects here.
+          example: https://reinspect.example.com/runs/run-2026-06-06-001
+        status: { $ref: '#/components/schemas/RunStatus' }
+
+    Run:
+      type: object
+      properties:
+        run_id: { type: string }
+        project: { type: string, description: Project external_id (Materia slug). }
+        group: { type: string }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        out_dir:
+          type: [string, 'null']
+          description: Produced pandda2_out/ tree (relpath under the share). Null until complete.
+        failure_mode:
+          type: [string, 'null']
+          description: Catalogue code; advisory, distinct from human verdict. Null unless failed.
+        failure_message:
+          type: [string, 'null']
+          example: Out of memory at shell 3/12
+        log_stream_url:
+          type: [string, 'null']
+          format: uri
+          description: Pointer the UI streams from (Batch streamFiles / local). Logs are NOT in the DB.
+        shell_progress:
+          type: [string, 'null']
+          description: 'Coarse progress, e.g. "3/12"; null when the image does not emit PANDDA_PROGRESS.'
+        parent_run_id:
+          type: [string, 'null']
+          description: Set when this run is an explicit retry of another.
+        triggered_by_oid:
+          type: [string, 'null']
+          description: AAD object id of the human who triggered the run (on-behalf-of).
+        submitted_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+
+    RunStatus:
+      type: string
+      enum: [queued, provisioning, running, succeeded, failed, cancelled]
