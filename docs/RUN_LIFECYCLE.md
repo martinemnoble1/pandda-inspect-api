@@ -25,7 +25,7 @@ a run-request, and redirects the user to Reinspect.
 Why the shift (in priority order):
 
 1. **PanDDA-domain vocabulary belongs next to code that already speaks it.**
-   Run-progress parsing (shell N/M), failure classification (OOM, missing
+   Run-progress parsing (dataset j/N), failure classification (OOM, missing
    free-R, ligand block, dataset-range), and recovery actions ("retry on a
    larger SKU") draw on the same lexicon Reinspect uses for events/shells/
    autobuild. Duplicating that dialect in Materia guarantees drift.
@@ -70,7 +70,7 @@ Logs are **not** streamed through the database. They live where the runner
 already puts them — Batch `streamFiles` (node-local stdout/stderr via Batch's
 own auth, no proxy to operate) for the cloud binding, a local file / ring
 buffer for `LocalProcessRunner`. The `Run` row holds a **pointer**
-(`log_stream_url`) plus coarse status and shell-progress (low-frequency
+(`log_stream_url`) plus coarse status and progress (low-frequency
 writes). This keeps the DB write profile close to today's batch-ingest
 workload, so **SQLite stays viable for single-tenant / desktop**. Postgres
 becomes the **multi-tenant switch** (multiple concurrent runs × multiple
@@ -271,10 +271,12 @@ To be delivered as Materia's `CCP4I2_PANDDA_INVOCATION_CONTRACT.md`:
   inputs under the same share root); `pandda2_out/` is a child of `--out_dir`.
 - **Exit code:** 0 success / non-zero failure; the runner classifies on stderr
   match, not on the exit-code *value* (advisory-provenance framing).
-- **Per-shell progress — OPEN.** Preferred resolution: instrument the fork with
-  `print(f"PANDDA_PROGRESS: shell {i}/{N}", flush=True)` so progress is a stable
-  contract, not a fragile regex. Until then the runner treats progress as
-  unknown (`Running`, no shell count).
+- **Progress signal — LANDED (per-dataset).** The image emits
+  `PANDDA_PROGRESS: dataset <j+1>/<N>` (Materia PR #98) — the visible outer
+  iteration is per-dataset; shells are an internal memory-scaling concept. The
+  runner parses the last such line into the granularity-neutral `Run.progress`
+  field (renamed from `shell_progress`); empty until the first line. A future
+  PanDDA surfacing shell-level detail fits the same field without a rename.
 - **Pinned image tag** (`materia/pandda:<timestamp>`) — classification rules pin
   to it.
 

@@ -459,9 +459,12 @@ class Run(models.Model):
     # Pointer the UI streams logs from (Batch streamFiles / local file). Logs
     # are NOT stored in the DB — see docs/RUN_LIFECYCLE.md condition (b).
     log_stream_url = models.CharField(max_length=1024, blank=True, default="")
-    # Coarse per-shell progress, e.g. "3/12"; empty when the image does not
-    # emit a PANDDA_PROGRESS signal.
-    shell_progress = models.CharField(max_length=32, blank=True, default="")
+    # Coarse progress text parsed from the image's PANDDA_PROGRESS signal,
+    # e.g. "dataset 3/120" (the visible outer iteration is per-dataset; shells
+    # are an internal memory-scaling concept). Deliberately granularity-neutral
+    # so a future PanDDA can surface dataset/shell/both without a rename. Empty
+    # when the image emits no signal. See docs/RUN_LIFECYCLE.md.
+    progress = models.CharField(max_length=32, blank=True, default="")
 
     # Provenance: the AAD object id of the human who triggered the run
     # (on-behalf-of), sibling of Event.inspected_by_oid. Null with auth off.

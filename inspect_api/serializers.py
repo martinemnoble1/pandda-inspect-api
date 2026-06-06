@@ -327,7 +327,7 @@ class RunSerializer(serializers.ModelSerializer):
             "failure_mode",
             "failure_message",
             "log_stream_url",
-            "shell_progress",
+            "progress",
             "parent_run_id",
             "triggered_by_oid",
             "sizing_hint",
