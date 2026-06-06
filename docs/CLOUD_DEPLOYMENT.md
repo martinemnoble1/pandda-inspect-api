@@ -179,12 +179,15 @@ a SPA + WASM + API, fussier than a plain API):
 
 1. **`ui_url` has a `/runs/` segment** — set `REINSPECT_UI_BASE_URL` to the
    prefix *without* `/runs` (`…/reinspect`); the route is `…/reinspect/runs/<id>`.
-2. **Asset base path** — the built client uses absolute asset URLs (`/assets/…`,
-   `/MoorhenAssets/…`). Simplest: the proxy **strips the `/reinspect` prefix**
-   for *all* sub-paths (page, `/assets`, `/api`, `/healthz`) so Reinspect stays
-   path-agnostic (matches the existing `api/proxy/ccp4i2/*` pattern). If the
-   prefix is NOT stripped, the client must be built with a `/reinspect/` base —
-   flag us and we'll wire a configurable `VITE_BASE`.
+2. **Asset base path (implemented).** The client is built with **`VITE_BASE`**
+   so every emitted URL — assets, `index.html` refs, the inline Moorhen WASM
+   loader, our API calls, and the server-emitted `download_url` — is prefixed.
+   Materia's image build passes `--build-arg VITE_BASE=/reinspect`; the proxy
+   then needs a **single rule**: `/reinspect/* → Reinspect, strip /reinspect`
+   (matching the existing `api/proxy/ccp4i2/*` pattern) — no origin-root
+   namespace claims, no `/favicon.ico` collision. The desktop build passes no
+   `VITE_BASE` (base `/`), so it is byte-identical. NB pass `VITE_BASE` WITHOUT
+   a trailing slash (`/reinspect`).
 3. **COOP/COEP must pass through** — Moorhen's WASM needs
    `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
    require-corp` (the server sets them on every response). If the proxy strips
