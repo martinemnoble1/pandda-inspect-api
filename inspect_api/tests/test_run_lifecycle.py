@@ -139,6 +139,8 @@ class RunApiTest(TestCase):
         # Project get-or-created by external_id (Materia slug).
         proj = Project.objects.get(external_id="CDK4")
         self.assertEqual(proj.name, "CDK4")
+        # project_id lets the run-landing page link to /projects/<id>.
+        self.assertEqual(data["project_id"], proj.id)
         # Dispatched a pandda2.analyse spec pointing at the share's datasets.
         spec, _ = fake.submitted[0]
         self.assertEqual(spec.tool, "pandda2.analyse")
@@ -170,6 +172,10 @@ class RunApiTest(TestCase):
         self.assertEqual(Run.objects.count(), 2)
         child = Run.objects.get(pk=int(r2.json()["run_id"]))
         self.assertEqual(child.parent_run_id, int(rid))
+        # The retry key (<sha256>:retry:<uuid4hex> = 103 chars) must fit the
+        # field cap — SQLite ignores it but Postgres enforces it in prod.
+        cap = Run._meta.get_field("idempotency_key").max_length
+        self.assertLessEqual(len(child.idempotency_key), cap)
 
     def test_unknown_retry_of_400(self):
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
