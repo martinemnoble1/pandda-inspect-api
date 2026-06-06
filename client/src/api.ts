@@ -2,6 +2,8 @@
  * The only thing the client knows about the backend: the REST contract.
  * No filesystem paths, no panddaPrefix — just typed calls to /api/v1.
  */
+import { acquireToken, cachedAccessToken } from "./auth";
+
 // Public path prefix the app is served under (Vite `base`, e.g. "/reinspect/"
 // when path-mounted; "/" by default → empty prefix, unchanged for desktop).
 // Every backend URL — our own calls AND server-emitted absolute ones like
@@ -164,8 +166,21 @@ export interface Run {
   ui_url: string;
 }
 
+// All backend calls go through here: when AAD auth is enabled it attaches the
+// bearer; when disabled (desktop/dev) it is a plain fetch — identical to before.
+async function authedFetch(
+  url: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const token = await acquireToken();
+  if (!token) return fetch(url, init);
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return fetch(url, { ...init, headers });
+}
+
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(`${BASE}${path}`);
+  const r = await authedFetch(`${BASE}${path}`);
   if (!r.ok) throw new Error(`${r.status} ${path}`);
   return r.json();
 }
@@ -183,7 +198,7 @@ export const api = {
       `/events/?project=${encodeURIComponent(projectName)}&limit=500`
     ),
   async setDecision(eventId: number, patch: Partial<PanddaEvent>) {
-    const r = await fetch(`${BASE}/events/${eventId}/`, {
+    const r = await authedFetch(`${BASE}/events/${eventId}/`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
@@ -197,7 +212,7 @@ export const api = {
   // and repoints current_model. ``merge`` marks a ligand merge for this event
   // (sets pose_merged + auto-Hit); omit it for a generic save.
   async commitModel(eventId: number, pdb: string, opts?: { merge?: boolean }) {
-    const r = await fetch(`${BASE}/events/${eventId}/commit_model/`, {
+    const r = await authedFetch(`${BASE}/events/${eventId}/commit_model/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pdb, merge: opts?.merge ?? false }),
@@ -210,7 +225,7 @@ export const api = {
     const form = new FormData();
     form.append("name", name);
     form.append("file", file);
-    const r = await fetch(`${BASE}/projects/import/`, {
+    const r = await authedFetch(`${BASE}/projects/import/`, {
       method: "POST",
       body: form,
     });
@@ -222,7 +237,7 @@ export const api = {
   // Desktop-only: a server path is meaningful only when the backend runs on
   // the same machine (Electron/CLI). The endpoint itself is localhost-guarded.
   async ingestPath(name: string, path: string) {
-    const r = await fetch(`${BASE}/projects/ingest_path/`, {
+    const r = await authedFetch(`${BASE}/projects/ingest_path/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, path }),
@@ -238,7 +253,7 @@ export const api = {
   // Dispatch a refinement of a dataset's current-best model. Returns the
   // queued/running Job; poll getJob until it leaves "running".
   async submitRefine(datasetId: number, params?: Record<string, unknown>) {
-    const r = await fetch(`${BASE}/jobs/submit/`, {
+    const r = await authedFetch(`${BASE}/jobs/submit/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dataset: datasetId, params }),
@@ -259,5 +274,14 @@ export const api = {
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
   // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it
   // routes through the mount when path-mounted (no-op when PREFIX is "").
-  artifactUrl: (a: Artifact) => `${PREFIX}${a.download_url}`,
+  // These are fetched by Moorhen's OWN internal code (no header hook), so when
+  // auth is on we carry the bearer in the query string — the ccp4i2 middleware
+  // accepts ?access_token for downloads. Empty token (desktop) => bare URL.
+  artifactUrl: (a: Artifact) => {
+    const url = `${PREFIX}${a.download_url}`;
+    const token = cachedAccessToken();
+    if (!token) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}access_token=${encodeURIComponent(token)}`;
+  },
 };

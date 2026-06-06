@@ -17,6 +17,15 @@ WORKDIR /client
 # prefixed. See docs/CLOUD_DEPLOYMENT.md (Ingress).
 ARG VITE_BASE=/
 ENV VITE_BASE=${VITE_BASE}
+# AAD config for the cloud SPA's bearer-token acquisition (non-secret public
+# IDs). Set BOTH on the cloud build (--build-arg VITE_AAD_CLIENT_ID=…
+# VITE_AAD_TENANT_ID=…); unset ⇒ the SPA runs with no auth (desktop/dev). The
+# AAD app must register the redirect URI <origin><VITE_BASE>/. See
+# docs/CLOUD_DEPLOYMENT.md (Auth).
+ARG VITE_AAD_CLIENT_ID=
+ARG VITE_AAD_TENANT_ID=
+ENV VITE_AAD_CLIENT_ID=${VITE_AAD_CLIENT_ID}
+ENV VITE_AAD_TENANT_ID=${VITE_AAD_TENANT_ID}
 # Manifests + the vendored Moorhen tarball (a local file: dependency in
 # package.json) must all be present before `npm ci` resolves them.
 COPY client/package.json client/package-lock.json ./
