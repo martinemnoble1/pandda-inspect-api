@@ -112,3 +112,62 @@ python manage.py test inspect_api.tests.test_storage_azure
 `--skipApiVersionCheck` lets Azurite accept the (newer) API version recent
 `azure-storage-blob` SDKs negotiate. The test skips itself cleanly when the env
 vars / SDK aren't present, so the default `manage.py test` run is unaffected.
+
+## 3. Container deployment (Azure Container Apps / Materia host)
+
+The repo ships a [Dockerfile](../Dockerfile): stage 1 builds the React/Moorhen
+client; stage 2 installs `requirements.txt` + `requirements-cloud.txt` and runs
+the **same** waitress server the desktop app uses
+([packaging/server_main.py](../packaging/server_main.py)) — bound to
+`0.0.0.0` and pointed at a cloud DB. Build/push to ACR, point the Container App
+at the image.
+
+### Health probe
+
+`GET /healthz` → `200 {"status":"ok"}` (503 if the DB is unreachable). Plain,
+auth-exempt (one of the paths the ccp4i2 auth middleware bypasses), no `/api`
+prefix — wire it as both the **liveness and readiness** probe. The same view is
+also at `/api/v1/health/` for in-app clients.
+
+### Migration strategy
+
+`server_main.py` runs `migrate` on start (idempotent), so a **single-replica**
+Container App self-migrates on boot — simplest for the demo. For **multiple
+replicas**, run migrations as a one-shot job/init-container *before* scaling the
+app (concurrent `migrate` from N replicas is unsafe); the app containers then
+boot against an already-migrated DB (the idempotent re-run is a no-op).
+
+### Environment variables (definitive manifest)
+
+**Required for any cloud deploy**
+| var | purpose |
+|-----|---------|
+| `PANDDA_HOST` | bind address — set `0.0.0.0` in a container (default `127.0.0.1`) |
+| `PANDDA_PORT` | listen port (default `8000`) |
+| `DATABASE_URL` | `postgres://user:pass@host:5432/db` — the multi-tenant DB. **Unset ⇒ SQLite** at `PANDDA_DB_PATH` (fine for single-replica/demo; mount a volume) |
+| `PANDDA_DATA_ROOT` / `PANDDA_JOBS_ROOT` | the mounted projects share (e.g. `/mnt/projects`) for artifacts + job/run workdirs |
+
+**Auth (opt-in; see §1)** — `PANDDA_AUTH_BACKEND=ccp4i2`, then
+`CCP4I2_REQUIRE_AUTH=true`, `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`
+(+ optional `ALLOWED_AZURE_AD_GROUPS`).
+
+**Storage (opt-in; see §2)** — `PANDDA_DATA_STORE=azure`, then
+`AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER`
+(+ optional `PANDDA_BLOB_CACHE`).
+
+**Run lifecycle**
+| var | purpose |
+|-----|---------|
+| `REINSPECT_UI_BASE_URL` | base for the `ui_url` returned by `POST /runs/`. **Unset ⇒ derived from the request origin**, so *either* a dedicated subdomain (`https://reinspect.example`) *or* a path on Materia's domain works — set it to whichever origin the user's browser reaches Reinspect at; no code change either way |
+| `PANDDA_JOB_RUNNER` | `local` (default; subprocess) or `azure_batch` (step 2) |
+
+**Azure Batch (step 2 — read by the forthcoming `AzureBatchRunner`)** — names
+adopted from Materia's convention so the bicep can set them now:
+`AZURE_BATCH_ACCOUNT_ENDPOINT`, `AZURE_BATCH_ACCOUNT_NAME`,
+`AZURE_BATCH_POOL_ID` (+ pool auth via `DefaultAzureCredential` /
+the Container App's managed identity).
+
+> **UI URL shape (open infra choice):** subdomain vs path-on-Materia's-domain is
+> purely an ingress decision on your side — the app supports both transparently
+> via `REINSPECT_UI_BASE_URL`. Pick whichever; tell us the final origin only so
+> the value is set correctly.

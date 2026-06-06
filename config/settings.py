@@ -56,15 +56,24 @@ TEMPLATES = [
     }
 ]
 
+# Default: SQLite at an env-overridable, writable path — the desktop/dev
+# binding (a packaged read-only bundle MUST point PANDDA_DB_PATH at a writable
+# location; DESIGN §5.7). A cloud deploy that needs concurrent multi-user
+# writes sets ``DATABASE_URL`` (postgres://…) instead — the multi-tenant
+# switch from docs/RUN_LIFECYCLE.md (b). When unset, behaviour is unchanged.
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        # Writable path: in a packaged (read-only) app bundle this MUST point
-        # at a user-writable location, so it is env-overridable. Defaults near
-        # the repo for dev. (DESIGN §5.7.)
         "NAME": os.environ.get("PANDDA_DB_PATH") or (BASE_DIR / "db.sqlite3"),
     }
 }
+_DATABASE_URL = os.environ.get("DATABASE_URL")
+if _DATABASE_URL:
+    import dj_database_url
+
+    DATABASES["default"] = dj_database_url.parse(
+        _DATABASE_URL, conn_max_age=600
+    )
 
 # Where ingested PanDDA project trees live, so the API can stream artifacts.
 # Per-project ``source_root`` (set at ingest) is the primary resolver; this is
