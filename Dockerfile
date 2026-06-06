@@ -11,6 +11,12 @@
 # --- stage 1: build the React/Moorhen client into client/dist --------------
 FROM node:20-slim AS client
 WORKDIR /client
+# Public path the app is mounted under. Default "/" (origin root). A
+# path-mounted deploy (Reinspect behind a proxy at /reinspect on Materia's
+# domain) passes --build-arg VITE_BASE=/reinspect so every emitted URL is
+# prefixed. See docs/CLOUD_DEPLOYMENT.md (Ingress).
+ARG VITE_BASE=/
+ENV VITE_BASE=${VITE_BASE}
 # Manifests + the vendored Moorhen tarball (a local file: dependency in
 # package.json) must all be present before `npm ci` resolves them.
 COPY client/package.json client/package-lock.json ./

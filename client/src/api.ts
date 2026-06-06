@@ -2,7 +2,12 @@
  * The only thing the client knows about the backend: the REST contract.
  * No filesystem paths, no panddaPrefix — just typed calls to /api/v1.
  */
-const BASE = "/api/v1";
+// Public path prefix the app is served under (Vite `base`, e.g. "/reinspect/"
+// when path-mounted; "/" by default → empty prefix, unchanged for desktop).
+// Every backend URL — our own calls AND server-emitted absolute ones like
+// download_url — is prefixed with this so they route through the mount.
+const PREFIX = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = `${PREFIX}/api/v1`;
 
 export interface SiteSummary {
   site_num: number;
@@ -222,5 +227,7 @@ export const api = {
   getJob: (id: number) => get<Job>(`/jobs/${id}/`),
 
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
-  artifactUrl: (a: Artifact) => a.download_url,
+  // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it
+  // routes through the mount when path-mounted (no-op when PREFIX is "").
+  artifactUrl: (a: Artifact) => `${PREFIX}${a.download_url}`,
 };
