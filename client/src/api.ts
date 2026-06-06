@@ -139,6 +139,31 @@ interface Paginated<T> {
   results: T[];
 }
 
+export type RunStatusValue =
+  | "queued"
+  | "provisioning"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+// A PanDDA run (the trigger→monitor→ingest lifecycle). The API emits ui_url
+// pointing at /runs/<run_id>, which the SPA renders via the RunStatus page.
+export interface Run {
+  run_id: string;
+  project: string; // external_id (Materia slug)
+  project_id: number; // Reinspect PK, for linking to the review surface
+  group: string;
+  status: RunStatusValue;
+  out_dir: string | null;
+  failure_mode: string | null;
+  failure_message: string | null;
+  log_stream_url: string | null;
+  progress: string | null; // e.g. "dataset 9/120"
+  parent_run_id: number | null;
+  ui_url: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${BASE}${path}`);
   if (!r.ok) throw new Error(`${r.status} ${path}`);
@@ -225,6 +250,11 @@ export const api = {
   // Poll a job. GET also runs the server-side land-on-success step, so once
   // this returns status "succeeded" the dataset's current_model is repointed.
   getJob: (id: number) => get<Job>(`/jobs/${id}/`),
+
+  // --- runs (PanDDA run lifecycle) ---
+  // Poll a run. The GET also advances server-side status (and ingests on first
+  // success), so once this returns "succeeded" the project holds the events.
+  getRun: (id: string) => get<Run>(`/runs/${id}/`),
 
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
   // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it

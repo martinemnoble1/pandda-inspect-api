@@ -470,8 +470,10 @@ class Run(models.Model):
     # (on-behalf-of), sibling of Event.inspected_by_oid. Null with auth off.
     triggered_by_oid = models.CharField(max_length=255, null=True, blank=True)
     # sha256(project ":" group ":" input_hash) — dedupes accidental re-POSTs of
-    # the SAME intent. An explicit retry sets parent_run and gets a fresh key.
-    idempotency_key = models.CharField(max_length=80, unique=True)
+    # the SAME intent. An explicit retry sets parent_run and gets a fresh key
+    # of the form "<sha256(64)>:retry:<uuid4hex(32)>" = 103 chars, so this must
+    # be >=103 (SQLite ignores the cap, but Postgres enforces it).
+    idempotency_key = models.CharField(max_length=128, unique=True)
     # Retry lineage (provenance only; the merge-vs-replace decision keys on
     # whether the scope already holds human decisions, NOT on this).
     parent_run = models.ForeignKey(

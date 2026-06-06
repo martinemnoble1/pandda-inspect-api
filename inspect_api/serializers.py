@@ -313,6 +313,9 @@ class RunSerializer(serializers.ModelSerializer):
     run_id = serializers.SerializerMethodField()
     project = serializers.CharField(source="project.external_id",
                                     read_only=True)
+    # Reinspect's numeric PK, so the run-landing page can link to the project's
+    # review surface (/projects/<id>) without resolving external_id client-side.
+    project_id = serializers.IntegerField(source="project.id", read_only=True)
     ui_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -320,6 +323,7 @@ class RunSerializer(serializers.ModelSerializer):
         fields = [
             "run_id",
             "project",
+            "project_id",
             "group",
             "status",
             "share_path",
