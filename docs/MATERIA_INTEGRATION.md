@@ -2,10 +2,21 @@
 
 **Status:** Design note. Companion to Materia's
 `apps/compounds/docs/proposal/PANDDA_INSPECT_INTEGRATION.md` (the consumer half;
-owner: Martin Noble, dated 2026-06-01). **Nothing here has shipped.** This file
-records *what this repo must do* to be incorporable by Materia (which embeds
-CCP4i2), separating the requirements that are already satisfied from the ones
-that are real work — and naming the one that gates the rest.
+owner: Martin Noble, dated 2026-06-01). This file records *what this repo must
+do* to be incorporable by Materia (which embeds CCP4i2), separating the
+requirements that are already satisfied from the ones that are real work — and
+naming the one that gates the rest.
+
+> **Update (2026-06): R0/R2/R3/R6 storage+auth+identity shipped** in PR #11
+> (opt-in CCP4i2 auth behind `PANDDA_AUTH_BACKEND`, `inspected_by_oid`, and
+> `AzureBlobStore` behind `PANDDA_DATA_STORE`). And **Q2 has an answer in
+> progress:** Reinspect is taking ownership of the whole PanDDA *run* lifecycle
+> (trigger → submit → monitor → ingest → review) via the `JobRunner` seam, with
+> Materia reduced to a trigger button + redirect. The design — `POST /runs/`,
+> the `Run` aggregate, rerun⇄decision reconciliation, the `PANDDA_JOB_RUNNER`
+> /`AzureBatchRunner` binding — is the ADR in
+> **[RUN_LIFECYCLE.md](RUN_LIFECYCLE.md)** with a draft contract in
+> **[run-lifecycle.openapi.yaml](run-lifecycle.openapi.yaml)**.
 
 > **Why this note exists.** The Materia doc names a set of requirements
 > (R0–R6) on *this* repo and explicitly says they are "written for the
