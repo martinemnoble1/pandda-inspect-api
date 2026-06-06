@@ -1,7 +1,8 @@
+from django.conf import settings
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Artifact, Dataset, Event, Job, Project, Shell
+from .models import Artifact, Dataset, Event, Job, Project, Run, Shell
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -278,3 +279,74 @@ class JobSerializer(serializers.ModelSerializer):
         if obj.output_artifact_id:
             return f"/api/v1/artifacts/{obj.output_artifact_id}/download/"
         return None
+
+
+class RunRequestSerializer(serializers.Serializer):
+    """Body of ``POST /runs/`` — Materia's trigger. Validation only (the view
+    resolves the project and dispatches); drives the OpenAPI request schema."""
+
+    project = serializers.CharField(
+        help_text="Caller's stable project slug (stored as Project.external_id)."
+    )
+    group = serializers.CharField(help_text="Sub-batch label within the project.")
+    share_path = serializers.CharField(
+        help_text="Input dir on the shared mount (unzipped export_pandda)."
+    )
+    input_hash = serializers.CharField(
+        required=False, allow_blank=True, default="",
+        help_text="Manifest content hash; folded into the idempotency key.",
+    )
+    sizing_hint = serializers.DictField(
+        required=False, default=dict,
+        help_text="Abstract hints, e.g. {datasets, cell_volume_class}.",
+    )
+    retry_of = serializers.IntegerField(
+        required=False, allow_null=True, default=None,
+        help_text="A prior run_id this explicitly retries (never deduped).",
+    )
+
+
+class RunSerializer(serializers.ModelSerializer):
+    """A PanDDA run's status, classified failure, and log pointer (read-only;
+    created via the viewset, not by POSTing a Run)."""
+
+    run_id = serializers.SerializerMethodField()
+    project = serializers.CharField(source="project.external_id",
+                                    read_only=True)
+    ui_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Run
+        fields = [
+            "run_id",
+            "project",
+            "group",
+            "status",
+            "share_path",
+            "out_dir",
+            "failure_mode",
+            "failure_message",
+            "log_stream_url",
+            "shell_progress",
+            "parent_run_id",
+            "triggered_by_oid",
+            "sizing_hint",
+            "submitted_at",
+            "started_at",
+            "completed_at",
+            "ui_url",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField())
+    def get_run_id(self, obj):
+        return str(obj.id)
+
+    @extend_schema_field(serializers.CharField())
+    def get_ui_url(self, obj):
+        base = getattr(settings, "REINSPECT_UI_BASE_URL", "") or ""
+        if not base:
+            request = self.context.get("request")
+            if request is not None:
+                base = request.build_absolute_uri("/").rstrip("/")
+        return f"{base}/runs/{obj.id}"

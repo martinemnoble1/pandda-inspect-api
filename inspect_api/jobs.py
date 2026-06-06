@@ -183,6 +183,17 @@ class LocalProcessRunner:
         """
         tool = spec.tool or settings.REFINE_TOOL
         name = Path(tool).name
+
+        if name == "pandda2.analyse":
+            # The PanDDA *analysis* run (the run lifecycle, NOT refinement).
+            # Output is a tree under --out_dir, not a single refine.pdb/mtz, so
+            # the wrapper's refinement output-discovery simply finds nothing —
+            # harmless; a Run's success is its exit code, and ingest reads
+            # out_dir separately. Regexes/dataset_range default to the
+            # published invocation contract but are param-overridable. See
+            # docs/RUN_LIFECYCLE.md (invocation contract).
+            return self._pandda2_argv(spec, tool), ""
+
         pdb = spec.inputs.get("pdb", "")
         mtz = spec.inputs.get("mtz", "")
         cif = spec.inputs.get("cif", "")
@@ -220,6 +231,29 @@ class LocalProcessRunner:
                 continue
             argv += [f"--{k}", str(v)]
         return argv, ""
+
+    def _pandda2_argv(self, spec: JobSpec, tool: str) -> list:
+        """Command line for a ``pandda2.analyse`` run (the invocation contract).
+
+        ``spec.inputs["data_dirs"]`` is the unzipped export_pandda input dir;
+        ``spec.params`` carries ``out_dir`` (where pandda2_out/ is written),
+        ``local_cpus``, the input regexes, and ``dataset_range``. The regexes
+        defeat PanDDA2's protein-grabbing defaults; the wide dataset_range is
+        defensive. Defaults match docs/RUN_LIFECYCLE.md; all are overridable so
+        the contract can be tuned without code changes.
+        """
+        p = spec.params or {}
+        return [
+            tool,
+            "--data_dirs", spec.inputs.get("data_dirs", ""),
+            "--out_dir", p.get("out_dir", ""),
+            "--local_cpus", str(p.get("local_cpus", 1)),
+            "--pdb_regex", p.get("pdb_regex", "final.pdb"),
+            "--mtz_regex", p.get("mtz_regex", "final.mtz"),
+            "--ligand_cif_regex", p.get("ligand_cif_regex", "dict.cif"),
+            "--ligand_pdb_regex", p.get("ligand_pdb_regex", "ligand.pdb"),
+            "--dataset_range", p.get("dataset_range", "0-999999999"),
+        ]
 
     def _wrapper_script(
         self, argv: list, stdin: str, workdir: Path
@@ -273,8 +307,22 @@ JSON
 
 
 def get_runner() -> JobRunner:
-    """The configured runner. Only the local binding exists here."""
-    return LocalProcessRunner()
+    """The configured runner, keyed on the ``PANDDA_JOB_RUNNER`` selector.
+
+    ``local`` (default) is the subprocess binding — it runs both refinement and
+    a ``pandda2.analyse`` run via the status-file wrapper, so the whole run
+    lifecycle works with zero cloud config. ``azure`` is the step-2 Batch
+    binding (not built yet); it is named here so the seam is explicit (R0).
+    """
+    backend = os.environ.get("PANDDA_JOB_RUNNER", "local").lower()
+    if backend in ("", "local"):
+        return LocalProcessRunner()
+    if backend == "azure":
+        raise NotImplementedError(
+            "AzureBatchRunner is step 2 (see docs/RUN_LIFECYCLE.md). Set "
+            "PANDDA_JOB_RUNNER=local or leave it unset for the local binding."
+        )
+    raise ValueError(f"unknown PANDDA_JOB_RUNNER: {backend!r}")
 
 
 # Future: SharedVolumeRunner (compose), QsubRunner, SlurmRunner,

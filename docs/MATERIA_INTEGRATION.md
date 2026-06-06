@@ -15,8 +15,12 @@ naming the one that gates the rest.
 > Materia reduced to a trigger button + redirect. The design — `POST /runs/`,
 > the `Run` aggregate, rerun⇄decision reconciliation, the `PANDDA_JOB_RUNNER`
 > /`AzureBatchRunner` binding — is the ADR in
-> **[RUN_LIFECYCLE.md](RUN_LIFECYCLE.md)** with a draft contract in
-> **[run-lifecycle.openapi.yaml](run-lifecycle.openapi.yaml)**.
+> **[RUN_LIFECYCLE.md](RUN_LIFECYCLE.md)**. **Step 1 has shipped:** the `Run`
+> model, `POST /runs/` + `GET /runs/{id}/`, and the `pandda2.analyse`
+> `LocalProcessRunner` branch — so the contract is now the **generated**
+> OpenAPI (`/api/schema/`, or `manage.py spectacular`), and the hand-drafted
+> stub has been retired. `AzureBatchRunner` (step 2) is the only remaining
+> piece, gated on Materia's Batch pool + identity grant.
 
 > **Why this note exists.** The Materia doc names a set of requirements
 > (R0–R6) on *this* repo and explicitly says they are "written for the
