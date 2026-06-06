@@ -183,14 +183,29 @@ def refresh_run(run: Run) -> Run:
 
     st = get_runner().status(run.runner_handle)
     state = st.get("state")
+    # Runner-agnostic: a remote runner (Batch) surfaces the log text + a log
+    # pointer in the status dict; the local runner returns neither, so we fall
+    # back to reading its on-disk job.log. Either way progress + failure
+    # classification run on the same text.
+    log_text = st.get("log") or _read_log(run)
+    save_fields = []
+    log_url = st.get("log_url")
+    if log_url and log_url != run.log_stream_url:
+        run.log_stream_url = log_url
+        save_fields.append("log_stream_url")
+
     if state == "running":
-        progress = parse_progress(_read_log(run))
+        progress = parse_progress(log_text)
         if progress and progress != run.progress:
             run.progress = progress
-            run.save(update_fields=["progress"])
+            save_fields.append("progress")
+        if save_fields:
+            run.save(update_fields=save_fields)
         return run
+    if save_fields:
+        run.save(update_fields=save_fields)
     if state == "failed":
-        return _fail(run)
+        return _fail(run, log_text, st.get("failure_message"))
     if state == "succeeded":
         return _complete(run)
     return run
@@ -208,12 +223,18 @@ def _read_log(run: Run) -> str:
         return ""
 
 
-def _fail(run: Run) -> Run:
-    code, message = classify_failure(_read_log(run))
+def _fail(run: Run, log_text: str = None, explicit_message: str = None) -> Run:
+    if log_text is None:
+        log_text = _read_log(run)
+    code, message = classify_failure(log_text)
+    # A scheduling/infra failure (e.g. Batch task that never produced stdout)
+    # has no log to match; prefer the runner's own message then.
+    if not log_text and explicit_message:
+        message = explicit_message
     run.status = Run.Status.FAILED
     run.failure_mode = code
     run.failure_message = message
-    run.failure_detail = _read_log(run)[-4000:]
+    run.failure_detail = (log_text or explicit_message or "")[-4000:]
     run.completed_at = timezone.now()
     run.save(update_fields=[
         "status", "failure_mode", "failure_message", "failure_detail",

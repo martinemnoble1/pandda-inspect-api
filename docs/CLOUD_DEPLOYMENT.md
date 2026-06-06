@@ -158,16 +158,34 @@ boot against an already-migrated DB (the idempotent re-run is a no-op).
 **Run lifecycle**
 | var | purpose |
 |-----|---------|
-| `REINSPECT_UI_BASE_URL` | base for the `ui_url` returned by `POST /runs/`. **Unset ⇒ derived from the request origin**, so *either* a dedicated subdomain (`https://reinspect.example`) *or* a path on Materia's domain works — set it to whichever origin the user's browser reaches Reinspect at; no code change either way |
-| `PANDDA_JOB_RUNNER` | `local` (default; subprocess) or `azure_batch` (step 2) |
+| `REINSPECT_UI_BASE_URL` | base for the `ui_url` returned by `POST /runs/` (`{base}/runs/<id>`). **Decision: path-on-Materia's-domain** — set to `https://<materia-host>/reinspect`, giving `ui_url = https://<materia-host>/reinspect/runs/<id>`. Unset ⇒ derived from request origin (fine only when Reinspect is reached directly). |
+| `PANDDA_JOB_RUNNER` | `local` (default; subprocess) or `azure_batch` (the Batch runner) |
 
-**Azure Batch (step 2 — read by the forthcoming `AzureBatchRunner`)** — names
-adopted from Materia's convention so the bicep can set them now:
-`AZURE_BATCH_ACCOUNT_ENDPOINT`, `AZURE_BATCH_ACCOUNT_NAME`,
-`AZURE_BATCH_POOL_ID` (+ pool auth via `DefaultAzureCredential` /
-the Container App's managed identity).
+**Azure Batch** — read by `AzureBatchRunner` (`PANDDA_JOB_RUNNER=azure_batch`;
+needs `azure-batch` + `azure-identity` from requirements-cloud). Names adopted
+from Materia's convention: `AZURE_BATCH_ACCOUNT_ENDPOINT`,
+`AZURE_BATCH_ACCOUNT_NAME`, `AZURE_BATCH_POOL_ID`, plus optional
+`AZURE_BATCH_JOB_ID` (default `pandda-runs`). Pool auth via
+`DefaultAzureCredential` → the Container App's managed identity (Batch
+contributor). **Caveat:** the runner's lifecycle logic is unit-tested against a
+mocked SDK; the SDK wire calls still need one validation run against a live
+Batch account before production (Materia owns that integration test).
 
-> **UI URL shape (open infra choice):** subdomain vs path-on-Materia's-domain is
-> purely an ingress decision on your side — the app supports both transparently
-> via `REINSPECT_UI_BASE_URL`. Pick whichever; tell us the final origin only so
-> the value is set correctly.
+### Ingress — path-routing (decided)
+
+Reinspect is served **under a path on Materia's domain** (e.g.
+`/reinspect/...`), not a subdomain. Three things the proxy must honour (this is
+a SPA + WASM + API, fussier than a plain API):
+
+1. **`ui_url` has a `/runs/` segment** — set `REINSPECT_UI_BASE_URL` to the
+   prefix *without* `/runs` (`…/reinspect`); the route is `…/reinspect/runs/<id>`.
+2. **Asset base path** — the built client uses absolute asset URLs (`/assets/…`,
+   `/MoorhenAssets/…`). Simplest: the proxy **strips the `/reinspect` prefix**
+   for *all* sub-paths (page, `/assets`, `/api`, `/healthz`) so Reinspect stays
+   path-agnostic (matches the existing `api/proxy/ccp4i2/*` pattern). If the
+   prefix is NOT stripped, the client must be built with a `/reinspect/` base —
+   flag us and we'll wire a configurable `VITE_BASE`.
+3. **COOP/COEP must pass through** — Moorhen's WASM needs
+   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
+   require-corp` (the server sets them on every response). If the proxy strips
+   them the viewer breaks. Preserve them unmodified.

@@ -32,6 +32,12 @@ waitress>=3.0
 dj-database-url>=2.1
 psycopg[binary]>=3.1
 
+# Azure Batch runner (jobs.get_runner with PANDDA_JOB_RUNNER=azure_batch) —
+# submits PanDDA runs to the pool. azure-identity provides the managed-identity
+# DefaultAzureCredential. Imported lazily; needed only for the cloud runner.
+azure-batch>=15.0,<16
+azure-identity>=1.25,<2
+
 # Azure Blob Storage backend for the DataStore seam (storage.AzureBlobStore).
 # Pinned to the line the Materia/CCP4i2 host ships
 # (ccp4i2/server/requirements-azure.txt: azure-storage-blob==12.26.0) so the

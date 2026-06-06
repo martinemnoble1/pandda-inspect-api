@@ -51,6 +51,31 @@ class JobRunner(Protocol):
     def cancel(self, handle: str) -> None: ...
 
 
+def build_pandda2_argv(spec: JobSpec, tool: str = "pandda2.analyse") -> list:
+    """The ``pandda2.analyse`` command line — the invocation contract.
+
+    Shared by every runner: the local runner returns it as argv; the Azure
+    Batch runner joins it into a task command line. ``spec.inputs["data_dirs"]``
+    is the unzipped export_pandda input dir; ``spec.params`` carries ``out_dir``
+    (where pandda2_out/ is written), ``local_cpus``, the input regexes, and
+    ``dataset_range``. The regexes defeat PanDDA2's protein-grabbing defaults;
+    the wide dataset_range is defensive. Defaults match docs/RUN_LIFECYCLE.md;
+    all are overridable so the contract can be tuned without code changes.
+    """
+    p = spec.params or {}
+    return [
+        tool,
+        "--data_dirs", spec.inputs.get("data_dirs", ""),
+        "--out_dir", p.get("out_dir", ""),
+        "--local_cpus", str(p.get("local_cpus", 1)),
+        "--pdb_regex", p.get("pdb_regex", "final.pdb"),
+        "--mtz_regex", p.get("mtz_regex", "final.mtz"),
+        "--ligand_cif_regex", p.get("ligand_cif_regex", "dict.cif"),
+        "--ligand_pdb_regex", p.get("ligand_pdb_regex", "ligand.pdb"),
+        "--dataset_range", p.get("dataset_range", "0-999999999"),
+    ]
+
+
 def _activation_prologue() -> str:
     """Shell snippet that prepares the environment for the refinement tool.
 
@@ -192,7 +217,7 @@ class LocalProcessRunner:
             # out_dir separately. Regexes/dataset_range default to the
             # published invocation contract but are param-overridable. See
             # docs/RUN_LIFECYCLE.md (invocation contract).
-            return self._pandda2_argv(spec, tool), ""
+            return build_pandda2_argv(spec, tool), ""
 
         pdb = spec.inputs.get("pdb", "")
         mtz = spec.inputs.get("mtz", "")
@@ -231,29 +256,6 @@ class LocalProcessRunner:
                 continue
             argv += [f"--{k}", str(v)]
         return argv, ""
-
-    def _pandda2_argv(self, spec: JobSpec, tool: str) -> list:
-        """Command line for a ``pandda2.analyse`` run (the invocation contract).
-
-        ``spec.inputs["data_dirs"]`` is the unzipped export_pandda input dir;
-        ``spec.params`` carries ``out_dir`` (where pandda2_out/ is written),
-        ``local_cpus``, the input regexes, and ``dataset_range``. The regexes
-        defeat PanDDA2's protein-grabbing defaults; the wide dataset_range is
-        defensive. Defaults match docs/RUN_LIFECYCLE.md; all are overridable so
-        the contract can be tuned without code changes.
-        """
-        p = spec.params or {}
-        return [
-            tool,
-            "--data_dirs", spec.inputs.get("data_dirs", ""),
-            "--out_dir", p.get("out_dir", ""),
-            "--local_cpus", str(p.get("local_cpus", 1)),
-            "--pdb_regex", p.get("pdb_regex", "final.pdb"),
-            "--mtz_regex", p.get("mtz_regex", "final.mtz"),
-            "--ligand_cif_regex", p.get("ligand_cif_regex", "dict.cif"),
-            "--ligand_pdb_regex", p.get("ligand_pdb_regex", "ligand.pdb"),
-            "--dataset_range", p.get("dataset_range", "0-999999999"),
-        ]
 
     def _wrapper_script(
         self, argv: list, stdin: str, workdir: Path
@@ -317,11 +319,11 @@ def get_runner() -> JobRunner:
     backend = os.environ.get("PANDDA_JOB_RUNNER", "local").lower()
     if backend in ("", "local"):
         return LocalProcessRunner()
-    if backend == "azure":
-        raise NotImplementedError(
-            "AzureBatchRunner is step 2 (see docs/RUN_LIFECYCLE.md). Set "
-            "PANDDA_JOB_RUNNER=local or leave it unset for the local binding."
-        )
+    if backend == "azure_batch":
+        # Lazy import: azure-batch is an opt-in cloud dep (requirements-cloud).
+        from .azure_batch import AzureBatchRunner
+
+        return AzureBatchRunner()
     raise ValueError(f"unknown PANDDA_JOB_RUNNER: {backend!r}")
 
 
