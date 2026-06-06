@@ -17,6 +17,14 @@ class Project(models.Model):
     """A PanDDA analysis project (one ingested results.json)."""
 
     name = models.CharField(max_length=255, unique=True)
+    # Stable identifier owned by an external trigger source (e.g. Materia's
+    # project slug). Lets a caller reference a project by ITS key without
+    # holding our PK: POST /runs/ get-or-creates the Project by external_id.
+    # Nullable/blank for projects born from a CLI ingest (no external owner).
+    # See docs/RUN_LIFECYCLE.md (project resolution).
+    external_id = models.CharField(
+        max_length=255, null=True, blank=True, unique=True
+    )
     # Filesystem location ingested from — the import boundary, not the source
     # of truth once ingested.
     source_root = models.CharField(max_length=1024)
@@ -404,3 +412,84 @@ class Job(models.Model):
     def __str__(self):
         scope = self.dataset.dtag if self.dataset else "project"
         return f"{self.tool}:{scope}:{self.status}"
+
+
+class Run(models.Model):
+    """A PanDDA *analysis* run — the whole-group lifecycle Reinspect owns.
+
+    Distinct from :class:`Job` (which produces ONE output Artifact and repoints
+    a current_model): a Run produces a ``pandda2_out/`` *tree* that is then
+    *ingested* into many Datasets/Events/Artifacts. Run and Job are siblings
+    sharing the ``jobs.JobRunner`` protocol (submit/status/cancel + opaque
+    handle), not the same model. See docs/RUN_LIFECYCLE.md.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROVISIONING = "provisioning", "Provisioning"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="runs"
+    )
+    group = models.CharField(max_length=255)
+    # Input dir on the shared mount (unzipped export_pandda output). Becomes the
+    # ingest source_root for the produced tree.
+    share_path = models.CharField(max_length=1024)
+    # Produced pandda2_out/ tree (absolute or under the share). Empty until the
+    # run succeeds and is ingested.
+    out_dir = models.CharField(max_length=1024, blank=True, default="")
+
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.QUEUED
+    )
+    # Machine classification of a failure — advisory, catalogue-coded, distinct
+    # from any human read (the Event.score/interesting grain). Empty unless
+    # failed/unclassified.
+    failure_mode = models.CharField(max_length=64, blank=True, default="")
+    failure_message = models.CharField(max_length=512, blank=True, default="")
+    failure_detail = models.TextField(blank=True, default="")
+
+    # Opaque handle from JobRunner.submit() (a workdir path, a Batch task id).
+    # The API never interprets it; it polls JobRunner.status(runner_handle).
+    runner_handle = models.CharField(max_length=255, blank=True, default="")
+    # Pointer the UI streams logs from (Batch streamFiles / local file). Logs
+    # are NOT stored in the DB — see docs/RUN_LIFECYCLE.md condition (b).
+    log_stream_url = models.CharField(max_length=1024, blank=True, default="")
+    # Coarse per-shell progress, e.g. "3/12"; empty when the image does not
+    # emit a PANDDA_PROGRESS signal.
+    shell_progress = models.CharField(max_length=32, blank=True, default="")
+
+    # Provenance: the AAD object id of the human who triggered the run
+    # (on-behalf-of), sibling of Event.inspected_by_oid. Null with auth off.
+    triggered_by_oid = models.CharField(max_length=255, null=True, blank=True)
+    # sha256(project ":" group ":" input_hash) — dedupes accidental re-POSTs of
+    # the SAME intent. An explicit retry sets parent_run and gets a fresh key.
+    idempotency_key = models.CharField(max_length=80, unique=True)
+    # Retry lineage (provenance only; the merge-vs-replace decision keys on
+    # whether the scope already holds human decisions, NOT on this).
+    parent_run = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="retries",
+        null=True,
+        blank=True,
+    )
+
+    # Abstract resource hints ({datasets, cell_volume_class}); the runner maps
+    # them to a SKU. No Azure/SKU types leak into the contract.
+    sizing_hint = models.JSONField(default=dict, blank=True)
+
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-submitted_at"]
+
+    def __str__(self):
+        return f"run:{self.project.external_id or self.project.name}" \
+               f"/{self.group}:{self.status}"

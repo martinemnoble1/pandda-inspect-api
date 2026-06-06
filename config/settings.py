@@ -96,6 +96,12 @@ REFINE_TOOL = os.environ.get("REFINE_TOOL", "servalcat")
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Base URL of the Reinspect UI, used to build the ``ui_url`` a run-trigger
+# caller (Materia) redirects to. Empty ⇒ derive from the request origin
+# (fine for the single-origin desktop/dev binding); set it in a split-origin
+# cloud deploy where the UI host differs. See docs/RUN_LIFECYCLE.md.
+REINSPECT_UI_BASE_URL = os.environ.get("REINSPECT_UI_BASE_URL", "")
+
 CORS_ALLOW_ALL_ORIGINS = True
 
 REST_FRAMEWORK = {

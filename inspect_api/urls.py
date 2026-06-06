@@ -9,5 +9,6 @@ router.register("events", views.EventViewSet, basename="event")
 router.register("artifacts", views.ArtifactViewSet, basename="artifact")
 router.register("shells", views.ShellViewSet, basename="shell")
 router.register("jobs", views.JobViewSet, basename="job")
+router.register("runs", views.RunViewSet, basename="run")
 
 urlpatterns = router.urls

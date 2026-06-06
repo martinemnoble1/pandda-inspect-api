@@ -15,7 +15,8 @@ from .identity import identity_from_request
 from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
-from .models import Artifact, Dataset, Event, Job, Project, Shell
+from .models import Artifact, Dataset, Event, Job, Project, Run, Shell
+from .runservice import RunError, refresh_run, submit_run
 from .storage import get_store
 from .serializers import (
     ArtifactSerializer,
@@ -23,6 +24,8 @@ from .serializers import (
     EventSerializer,
     JobSerializer,
     ProjectSerializer,
+    RunRequestSerializer,
+    RunSerializer,
     ShellSerializer,
 )
 
@@ -412,3 +415,88 @@ class JobViewSet(
     def refine_available(self, request):
         """Probe whether the refinement environment is wired (UI gating)."""
         return Response(get_runner().probe())
+
+
+class RunViewSet(
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    PanDDA run lifecycle — the door Materia POSTs through to trigger a run
+    (docs/RUN_LIFECYCLE.md):
+
+    * ``POST /runs/`` — trigger a run on a share-resident input group.
+      Idempotent on (project, group, input_hash); an explicit ``retry_of`` is
+      always a new run. Returns 201 (new) or 200 (idempotent hit).
+    * ``GET /runs/{id}/`` — poll. Refreshes status from the runner and, on first
+      observed success, ingests the produced pandda2_out/ tree (idempotent).
+    * ``GET /runs/?project=<external_id>&group=…`` — list.
+    * ``POST /runs/{id}/cancel/`` — terminate.
+    """
+
+    serializer_class = RunSerializer
+
+    def get_queryset(self):
+        qs = Run.objects.select_related("project")
+        project = self.request.query_params.get("project")
+        if project:
+            qs = qs.filter(project__external_id=project)
+        group = self.request.query_params.get("group")
+        if group:
+            qs = qs.filter(group=group)
+        return qs
+
+    def retrieve(self, request, *args, **kwargs):
+        # Polling endpoint: refresh from the runner (ingests on first success)
+        # before serializing.
+        run = refresh_run(self.get_object())
+        return Response(self.get_serializer(run).data)
+
+    @extend_schema(
+        request=RunRequestSerializer,
+        responses={
+            201: RunSerializer,
+            200: OpenApiResponse(
+                response=RunSerializer,
+                description="Idempotent hit — run for this key already exists.",
+            ),
+            400: OpenApiResponse(description="Bad inputs / unknown retry_of."),
+        },
+    )
+    def create(self, request, *args, **kwargs):
+        body = RunRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        data = body.validated_data
+        # On-behalf-of provenance: stamp the authenticated human's AAD oid when
+        # cloud auth is on; None for the no-auth desktop flow.
+        ident = identity_from_request(request)
+        oid = ident[1] if ident is not None else None
+        try:
+            run, created = submit_run(
+                project_external_id=data["project"],
+                group=data["group"],
+                share_path=data["share_path"],
+                input_hash=data.get("input_hash", ""),
+                sizing_hint=data.get("sizing_hint") or {},
+                retry_of=data.get("retry_of"),
+                triggered_by_oid=oid,
+            )
+        except RunError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        status = 201 if created else 200
+        return Response(
+            self.get_serializer(run).data, status=status
+        )
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Terminate a running run."""
+        run = self.get_object()
+        if run.runner_handle:
+            get_runner().cancel(run.runner_handle)
+            run.status = Run.Status.CANCELLED
+            run.completed_at = timezone.now()
+            run.save(update_fields=["status", "completed_at"])
+        return Response(self.get_serializer(run).data)
