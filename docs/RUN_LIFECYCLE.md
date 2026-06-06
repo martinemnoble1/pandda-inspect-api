@@ -1,10 +1,13 @@
 # ADR: PanDDA run-lifecycle ownership in pandda-inspect-api
 
-- **Status:** Accepted. **Step 1 shipped** — the `Run` model, `POST /runs/` +
-  `GET /runs/{id}/` (+ `cancel`), and the `pandda2.analyse` `LocalProcessRunner`
-  branch behind the `PANDDA_JOB_RUNNER` factory. The contract is now the
-  **generated** OpenAPI (`/api/schema/`); the hand-drafted stub is retired.
-  Remaining: `AzureBatchRunner` (step 2), recovery UX (step 3).
+- **Status:** Accepted. **Steps 1–2 shipped.** Step 1: the `Run` model,
+  `POST /runs/` + `GET /runs/{id}/` (+ `cancel`), and the `pandda2.analyse`
+  `LocalProcessRunner` branch behind the `PANDDA_JOB_RUNNER` factory — the
+  contract is the **generated** OpenAPI (`/api/schema/`). Step 2:
+  `AzureBatchRunner` (`PANDDA_JOB_RUNNER=azure_batch`) submitting to the Batch
+  pool — lifecycle logic unit-tested against a mocked SDK; **the SDK wire calls
+  await one live-Batch validation run** (Materia-owned). Remaining: recovery UX
+  (step 3) + the live validation.
 - **Date:** 2026-06-06.
 - **Participants:** Reinspect side (this repo) + Materia/CCP4i2 side.
 - **Supersedes:** the §9 split in Materia's `PANDDA2_ON_AZURE.md` (Materia
