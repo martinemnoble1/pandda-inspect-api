@@ -76,6 +76,27 @@ curator from the token: `inspected_by` = email, `inspected_by_oid` = the AAD
 desktop rows are untouched (matches §12 reconciliation). The `oid` column is
 nullable; no data migration is needed for existing rows.
 
+### SPA sign-in (client bearer)
+
+The backend middleware validates bearers; the **SPA acquires one** via MSAL and
+attaches it to every call. This is **build-time opt-in**: the client build sets
+`VITE_AAD_CLIENT_ID` + `VITE_AAD_TENANT_ID` (non-secret public IDs — both as
+Docker `--build-arg`s). Both set ⇒ the SPA runs an AAD redirect login on load,
+acquires `api://<client-id>/.default`, and sends `Authorization: Bearer …` on
+API calls; **both unset ⇒ no MSAL, no header — the desktop/dev flow is
+identical** (MSAL is a dynamic chunk that's never loaded).
+
+- **Register the redirect URI** on the AAD app: `<origin><VITE_BASE>/`
+  (e.g. `https://<materia-host>/reinspect/`).
+- **Artifact bytes** (maps/coords) are fetched by Moorhen's own internal code,
+  where no header can be set — so those URLs carry the token as
+  `?access_token=<token>` (the middleware's `extract_token` accepts this for
+  downloads). Don't strip that query param at the proxy.
+- Config is build-time (not a runtime `/config` endpoint) because a runtime
+  endpoint would itself sit behind the auth middleware the SPA needs config to
+  satisfy — and the IDs are public and the cloud image is already host-specific
+  via `VITE_BASE`.
+
 ## 2. Storage — `PANDDA_DATA_STORE`
 
 | value          | store                                                       |
@@ -147,9 +168,10 @@ boot against an already-migrated DB (the idempotent re-run is a no-op).
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` — the multi-tenant DB. **Unset ⇒ SQLite** at `PANDDA_DB_PATH` (fine for single-replica/demo; mount a volume) |
 | `PANDDA_DATA_ROOT` / `PANDDA_JOBS_ROOT` | the mounted projects share (e.g. `/mnt/projects`) for artifacts + job/run workdirs |
 
-**Auth (opt-in; see §1)** — `PANDDA_AUTH_BACKEND=ccp4i2`, then
+**Auth (opt-in; see §1)** — runtime (backend): `PANDDA_AUTH_BACKEND=ccp4i2`,
 `CCP4I2_REQUIRE_AUTH=true`, `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`
-(+ optional `ALLOWED_AZURE_AD_GROUPS`).
+(+ optional `ALLOWED_AZURE_AD_GROUPS`). Build-time (SPA bearer): the
+`--build-arg VITE_AAD_CLIENT_ID` / `VITE_AAD_TENANT_ID` pair (same IDs).
 
 **Storage (opt-in; see §2)** — `PANDDA_DATA_STORE=azure`, then
 `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER`

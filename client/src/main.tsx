@@ -12,6 +12,7 @@ import { ProjectDashboard } from "./pages/ProjectDashboard";
 import { InspectPage } from "./pages/InspectPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { RunStatus } from "./pages/RunStatus";
+import { authEnabled, ensureSignedIn, startTokenRefresh } from "./auth";
 
 const router = createBrowserRouter(
   [
@@ -35,11 +36,31 @@ const router = createBrowserRouter(
   { basename: import.meta.env.BASE_URL }
 );
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <Provider store={store}>
-      <CssBaseline />
-      <RouterProvider router={router} />
-    </Provider>
-  </React.StrictMode>
-);
+function render() {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <Provider store={store}>
+        <CssBaseline />
+        <RouterProvider router={router} />
+      </Provider>
+    </React.StrictMode>
+  );
+}
+
+// Cloud build (VITE_AAD_* set): complete AAD sign-in before rendering, so the
+// first data fetch already carries a bearer. ensureSignedIn redirects to the
+// login when there's no account (this page load then ends). Desktop/dev:
+// authEnabled is false → this resolves immediately and nothing auth runs.
+if (authEnabled) {
+  ensureSignedIn()
+    .then(() => {
+      startTokenRefresh();
+      render();
+    })
+    .catch((e) => {
+      console.error("AAD sign-in failed", e);
+      render(); // render anyway; API calls will surface the 401
+    });
+} else {
+  render();
+}
