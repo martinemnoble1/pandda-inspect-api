@@ -58,6 +58,18 @@ def classify_failure(log_text: str):
     return "unclassified_crash", "Run failed — inspect the log"
 
 
+# The image emits ``PANDDA_PROGRESS: dataset <j>/<N>`` on the visible outer
+# (per-dataset) iteration. Granularity-neutral capture: keep whatever trails
+# the marker (dataset today, possibly shells later) — last line wins.
+_PROGRESS = re.compile(r"PANDDA_PROGRESS:\s*(.+)")
+
+
+def parse_progress(log_text: str) -> str:
+    """Latest progress string from the log, or '' if none emitted yet."""
+    matches = _PROGRESS.findall(log_text)
+    return matches[-1].strip()[:32] if matches else ""
+
+
 def _idempotency_key(external_id: str, group: str, input_hash: str) -> str:
     raw = f"{external_id}:{group}:{input_hash}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -172,6 +184,10 @@ def refresh_run(run: Run) -> Run:
     st = get_runner().status(run.runner_handle)
     state = st.get("state")
     if state == "running":
+        progress = parse_progress(_read_log(run))
+        if progress and progress != run.progress:
+            run.progress = progress
+            run.save(update_fields=["progress"])
         return run
     if state == "failed":
         return _fail(run)

@@ -96,6 +96,18 @@ class ClassifyFailureTest(TestCase):
         self.assertEqual(code, "unclassified_crash")
 
 
+class ParseProgressTest(TestCase):
+    def test_latest_dataset_line_wins(self):
+        log = (
+            "starting\nPANDDA_PROGRESS: dataset 1/120\n"
+            "...\nPANDDA_PROGRESS: dataset 7/120\n...\n"
+        )
+        self.assertEqual(runservice.parse_progress(log), "dataset 7/120")
+
+    def test_none_yet(self):
+        self.assertEqual(runservice.parse_progress("warming up\n"), "")
+
+
 @override_settings(REINSPECT_UI_BASE_URL="https://reinspect.test")
 class RunApiTest(TestCase):
     def setUp(self):
@@ -203,3 +215,20 @@ class RunApiTest(TestCase):
             resp = self.client.get(f"/api/v1/runs/{rid}/")
         self.assertEqual(resp.json()["status"], "failed")
         self.assertEqual(resp.json()["failure_mode"], "oom")
+
+    def test_poll_running_populates_progress(self):
+        fake = FakeRunner()  # stays "running"
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(fake):
+            rid = self.client.post(
+                "/api/v1/runs/", self.body, format="json"
+            ).json()["run_id"]
+            run = Run.objects.get(pk=int(rid))
+            Path(run.runner_handle, "job.log").write_text(
+                "PANDDA_PROGRESS: dataset 1/120\n"
+                "PANDDA_PROGRESS: dataset 9/120\n",
+                encoding="utf-8",
+            )
+            resp = self.client.get(f"/api/v1/runs/{rid}/")
+        self.assertEqual(resp.json()["status"], "running")
+        self.assertEqual(resp.json()["progress"], "dataset 9/120")
