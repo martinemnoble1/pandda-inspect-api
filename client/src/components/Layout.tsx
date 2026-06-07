@@ -27,6 +27,9 @@ export function Layout() {
           <Button color="inherit" component={Link} to="/projects">
             Projects
           </Button>
+          <Button color="inherit" component={Link} to="/runs">
+            Runs
+          </Button>
           <Button color="inherit" component={Link} to="/import">
             Import
           </Button>

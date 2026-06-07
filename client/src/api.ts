@@ -164,6 +164,9 @@ export interface Run {
   progress: string | null; // e.g. "dataset 9/120"
   parent_run_id: number | null;
   ui_url: string;
+  submitted_at: string;
+  started_at: string | null;
+  completed_at: string | null;
 }
 
 // All backend calls go through here: when AAD auth is enabled it attaches the
@@ -270,6 +273,12 @@ export const api = {
   // Poll a run. The GET also advances server-side status (and ingests on first
   // success), so once this returns "succeeded" the project holds the events.
   getRun: (id: string) => get<Run>(`/runs/${id}/`),
+  // List runs, newest-first. No arg ⇒ all runs (the global view); pass a
+  // numeric project id ⇒ that project's runs (the dashboard view).
+  listRuns: (projectId?: number) =>
+    get<Paginated<Run>>(
+      projectId ? `/runs/?project_id=${projectId}` : "/runs/"
+    ),
 
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
   // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it

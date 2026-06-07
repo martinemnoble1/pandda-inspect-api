@@ -12,6 +12,7 @@ import { ProjectDashboard } from "./pages/ProjectDashboard";
 import { InspectPage } from "./pages/InspectPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { RunStatus } from "./pages/RunStatus";
+import { RunsPage } from "./pages/RunsPage";
 import { authEnabled, ensureSignedIn, startTokenRefresh } from "./auth";
 
 const router = createBrowserRouter(
@@ -23,6 +24,8 @@ const router = createBrowserRouter(
         { path: "/import", element: <ImportPage /> },
         { path: "/projects", element: <ProjectBrowser /> },
         { path: "/projects/:projectId", element: <ProjectDashboard /> },
+        // Global runs list (re-discovery / overview).
+        { path: "/runs", element: <RunsPage /> },
         // Landing page for a triggered run — the API's ui_url points here.
         { path: "/runs/:runId", element: <RunStatus /> },
         { path: "/settings", element: <SettingsPage /> },

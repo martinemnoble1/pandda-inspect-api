@@ -15,8 +15,9 @@ import {
   Typography,
 } from "@mui/material";
 import ScienceIcon from "@mui/icons-material/Science";
-import { api, type Artifact, type Project } from "../api";
+import { api, type Artifact, type Project, type Run } from "../api";
 import { SummaryCharts } from "../components/SummaryCharts";
+import { RunList } from "../components/RunList";
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
@@ -34,11 +35,18 @@ export function ProjectDashboard() {
   const id = Number(projectId);
   const [project, setProject] = useState<Project | null>(null);
   const [reports, setReports] = useState<Artifact[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [tab, setTab] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getProject(id).then(setProject).catch((e) => setError(String(e)));
+    // This project's PanDDA runs (cloud-triggered); empty for desktop/CLI
+    // projects, in which case the section below simply isn't shown.
+    api
+      .listRuns(id)
+      .then((p) => setRuns(p.results))
+      .catch(() => setRuns([]));
     // A catalogued report may not be on disk (e.g. pandda_inspect.html before
     // inspection). Probe each and keep only those that actually serve, so the
     // iframe never shows a broken tab.
@@ -138,6 +146,18 @@ export function ProjectDashboard() {
         </Stack>
         <SummaryCharts distributions={s.distributions} sites={s.sites} />
       </Paper>
+
+      {/* PanDDA runs for this project (cloud-triggered). Mirrors the Reports
+          pattern: shown only when there are runs, so desktop/CLI projects
+          aren't cluttered with an empty section. */}
+      {runs.length > 0 && (
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="h6" gutterBottom>
+            Runs
+          </Typography>
+          <RunList runs={runs} />
+        </Box>
+      )}
 
       {/* Legacy external HTML reports (PanDDA1 only — PanDDA2 emits none, in
           which case the live Summary above is the report and this section

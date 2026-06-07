@@ -124,6 +124,25 @@ class RunApiTest(TestCase):
         return mock.patch.object(runservice, "get_runner",
                                  return_value=runner)
 
+    def test_list_global_and_by_project_id(self):
+        fake = FakeRunner()
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(fake):
+            self.client.post("/api/v1/runs/", self.body, format="json")
+            other = {**self.body, "project": "BAZ2B", "input_hash": "h2"}
+            r2 = self.client.post("/api/v1/runs/", other, format="json")
+            pid2 = r2.json()["project_id"]
+            # Global list = both runs, newest-first.
+            allruns = self.client.get("/api/v1/runs/").json()
+            self.assertEqual(allruns["count"], 2)
+            self.assertEqual(allruns["results"][0]["project"], "BAZ2B")
+            # project_id filter = just that project's run.
+            scoped = self.client.get(
+                f"/api/v1/runs/?project_id={pid2}"
+            ).json()
+            self.assertEqual(scoped["count"], 1)
+            self.assertEqual(scoped["results"][0]["project"], "BAZ2B")
+
     def test_create_201_dispatches_and_resolves_project(self):
         fake = FakeRunner()
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
