@@ -171,6 +171,16 @@ class RunApiTest(TestCase):
         self.assertEqual(spec.params["local_cpus"], "8")
         self.assertIn("out_dir", spec.params)
 
+    def test_timestamps_are_utc_with_offset(self):
+        # USE_TZ=True ⇒ tz-aware UTC, serialized with a "Z" suffix, so the SPA
+        # can't misread a naive timestamp as browser-local (inflated durations).
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(FakeRunner()):
+            data = self.client.post(
+                "/api/v1/runs/", self.body, format="json"
+            ).json()
+        self.assertTrue(data["submitted_at"].endswith("Z"))
+
     def test_unknown_param_rejected(self):
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
                 self._patch_runner(FakeRunner()):
