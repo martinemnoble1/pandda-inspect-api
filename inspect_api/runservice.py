@@ -89,6 +89,23 @@ def _default_out_dir(share_path: str, group: str) -> str:
     return str(Path(share_path) / "pandda2_out")
 
 
+# pandda2.analyse overrides a trigger may set. Only these keys reach the
+# command line — an allowlist (not for shell safety: values are argv-quoted,
+# but to stop arbitrary --flags) that is settings-extensible
+# (PANDDA_RUN_ALLOWED_PARAMS) as more pandda2 flags are confirmed. out_dir /
+# data_dirs are deliberately NOT here — they are server-computed (ingest reads
+# out_dir). See docs/RUN_LIFECYCLE.md (invocation contract).
+DEFAULT_ALLOWED_PARAMS = frozenset({
+    "pdb_regex", "mtz_regex", "ligand_cif_regex", "ligand_pdb_regex",
+    "dataset_range", "local_cpus",
+})
+
+
+def allowed_params() -> frozenset:
+    extra = getattr(settings, "PANDDA_RUN_ALLOWED_PARAMS", None)
+    return frozenset(extra) if extra else DEFAULT_ALLOWED_PARAMS
+
+
 def submit_run(
     *,
     project_external_id: str,
@@ -96,6 +113,7 @@ def submit_run(
     share_path: str,
     input_hash: str = "",
     sizing_hint: dict | None = None,
+    params: dict | None = None,
     retry_of=None,
     triggered_by_oid: str | None = None,
 ):
@@ -107,6 +125,14 @@ def submit_run(
     """
     if not project_external_id or not group or not share_path:
         raise RunError("project, group and share_path are required")
+
+    params = params or {}
+    bad = set(params) - allowed_params()
+    if bad:
+        raise RunError(
+            f"unknown run params {sorted(bad)}; allowed: "
+            f"{sorted(allowed_params())}"
+        )
 
     parent = None
     if retry_of is not None:
@@ -135,6 +161,7 @@ def submit_run(
         share_path=share_path,
         out_dir=_default_out_dir(share_path, group),
         sizing_hint=sizing_hint or {},
+        params=params,
         idempotency_key=key,
         parent_run=parent,
         triggered_by_oid=triggered_by_oid,
@@ -151,7 +178,8 @@ def _dispatch(run: Run) -> None:
     spec = JobSpec(
         tool="pandda2.analyse",
         inputs={"data_dirs": str(Path(run.share_path) / "datasets")},
-        params={"out_dir": run.out_dir},
+        # Server-computed out_dir + the trigger's allowlisted overrides.
+        params={"out_dir": run.out_dir, **run.params},
     )
     try:
         handle = get_runner().submit(spec, workdir)

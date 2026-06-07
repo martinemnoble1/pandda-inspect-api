@@ -503,6 +503,7 @@ class RunViewSet(
                 share_path=data["share_path"],
                 input_hash=data.get("input_hash", ""),
                 sizing_hint=data.get("sizing_hint") or {},
+                params=data.get("params") or {},
                 retry_of=data.get("retry_of"),
                 triggered_by_oid=oid,
             )

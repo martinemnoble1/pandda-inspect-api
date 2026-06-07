@@ -164,9 +164,20 @@ export interface Run {
   progress: string | null; // e.g. "dataset 9/120"
   parent_run_id: number | null;
   ui_url: string;
+  params: Record<string, string>;
   submitted_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+// Body of POST /runs/ — the trigger. params are allowlisted pandda2 overrides
+// (regexes, dataset_range, local_cpus); unknown keys are rejected by the API.
+export interface RunRequest {
+  project: string;
+  group: string;
+  share_path: string;
+  input_hash?: string;
+  params?: Record<string, string>;
 }
 
 // All backend calls go through here: when AAD auth is enabled it attaches the
@@ -279,6 +290,17 @@ export const api = {
     get<Paginated<Run>>(
       projectId ? `/runs/?project_id=${projectId}` : "/runs/"
     ),
+  // Trigger a run (the "Run PanDDA" form). Returns the created/idempotent Run.
+  async triggerRun(body: RunRequest): Promise<Run> {
+    const r = await authedFetch(`${BASE}/runs/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || `${r.status} run trigger failed`);
+    return data as Run;
+  },
 
   // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
   // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it

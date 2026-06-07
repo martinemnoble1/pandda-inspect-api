@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Alert,
   Box,
+  Button,
   CircularProgress,
   Container,
   Stack,
   Typography,
 } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
 import { api, type Run } from "../api";
 import { RunList } from "../components/RunList";
 
@@ -43,9 +46,24 @@ export function RunsPage() {
   return (
     <Container maxWidth="lg">
       <Box sx={{ mt: 4 }}>
-        <Typography variant="h4" gutterBottom>
-          Runs
-        </Typography>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 2,
+          }}
+        >
+          <Typography variant="h4">Runs</Typography>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            component={Link}
+            to="/runs/new"
+          >
+            New run
+          </Button>
+        </Box>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             Could not load runs: {error}
