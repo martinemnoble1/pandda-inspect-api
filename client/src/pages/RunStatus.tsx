@@ -16,13 +16,57 @@ import { RunStatusChip } from "../components/RunList";
 const TERMINAL: RunStatusValue[] = ["succeeded", "failed", "cancelled"];
 const POLL_MS = 3000;
 
+// Parse a progress string like "dataset 9/120" into a bar fraction. Returns
+// null when there's no N/M to show (→ indeterminate bar).
+function parseCount(progress: string | null) {
+  const m = progress?.match(/(\d+)\s*\/\s*(\d+)/);
+  if (!m) return null;
+  const done = Number(m[1]);
+  const total = Number(m[2]);
+  if (!total) return null;
+  return { done, total, pct: Math.min(100, Math.round((done / total) * 100)) };
+}
+
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m) return `${m}m ${String(sec).padStart(2, "0")}s`;
+  return `${sec}s`;
+}
+
+// One timing line appropriate to the run's state: queued-for / running-for
+// while active, total duration once terminal.
+function timingLabel(run: Run, now: number): string {
+  const sub = Date.parse(run.submitted_at);
+  const start = run.started_at ? Date.parse(run.started_at) : null;
+  const done = run.completed_at ? Date.parse(run.completed_at) : null;
+  if (TERMINAL.includes(run.status)) {
+    if (start && done) return `Ran in ${fmtDuration(done - start)}`;
+    if (done) return `Finished in ${fmtDuration(done - sub)}`;
+    return "";
+  }
+  if (start) return `Running for ${fmtDuration(now - start)}`;
+  return `Queued for ${fmtDuration(now - sub)}`;
+}
+
+// Phase text for the non-terminal states (when there's no dataset count yet).
+function phaseText(status: RunStatusValue): string {
+  if (status === "provisioning") return "Provisioning a compute node…";
+  if (status === "queued") return "Queued…";
+  return "Starting analysis…";
+}
+
 // Landing page for a triggered PanDDA run: the API's ui_url points here
 // (/runs/<id>). Polls the run until it reaches a terminal state, surfacing
-// progress and — on success — a link to the project's review surface.
+// live progress + timing and — on success — a link to the review surface.
 export function RunStatus() {
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
@@ -52,6 +96,15 @@ export function RunStatus() {
     };
   }, [runId]);
 
+  // Tick the clock once a second so "Running for …" advances live.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const active = run ? !TERMINAL.includes(run.status) : false;
+  const count = run ? parseCount(run.progress) : null;
+
   return (
     <Container maxWidth="sm">
       <Box sx={{ mt: 6 }}>
@@ -79,15 +132,23 @@ export function RunStatus() {
               <Typography color="text.secondary">
                 {run.project} / {run.group}
               </Typography>
+              <Box sx={{ flexGrow: 1 }} />
+              <Typography variant="caption" color="text.secondary">
+                {timingLabel(run, now)}
+              </Typography>
             </Stack>
 
-            {!TERMINAL.includes(run.status) && (
+            {active && (
               <Box>
-                <LinearProgress sx={{ mb: 1 }} />
+                <LinearProgress
+                  variant={count ? "determinate" : "indeterminate"}
+                  value={count?.pct}
+                  sx={{ mb: 1, height: 8, borderRadius: 1 }}
+                />
                 <Typography variant="body2" color="text.secondary">
-                  {run.progress
-                    ? `Progress: ${run.progress}`
-                    : "Waiting for the analysis to report progress…"}
+                  {count
+                    ? `Dataset ${count.done} of ${count.total} (${count.pct}%)`
+                    : phaseText(run.status)}
                 </Typography>
               </Box>
             )}
