@@ -76,6 +76,22 @@ export function InspectPage() {
     lastHoveredAtomRef,
     extraSidePanels,
     store,
+    // Only override Moorhen's asset paths UNDER A PATH MOUNT. Moorhen builds
+    // its worker from `${urlPrefix}/wasm/CootWorker.js`; its default urlPrefix
+    // mis-resolves under /reinspect, so pin the ORIGIN-ROOTED /MoorhenAssets —
+    // it bypasses the mount and hits the host's (Materia's) CORP-correct
+    // /MoorhenAssets static. Monomers go to the canonical GitHub library (the
+    // host serves the JS/wasm but not the monomer .cifs). Desktop (BASE_URL
+    // "/") keeps Moorhen's defaults untouched, so the desktop viewer is
+    // byte-identical. See docs/CLOUD_DEPLOYMENT.md (Ingress / Moorhen assets).
+    ...(import.meta.env.BASE_URL !== "/"
+      ? {
+          urlPrefix: "/MoorhenAssets",
+          monomerLibraryPath:
+            "https://raw.githubusercontent.com/" +
+            "MonomerLibrary/monomers/master/",
+        }
+      : {}),
   };
 
   return (

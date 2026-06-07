@@ -219,5 +219,14 @@ a SPA + WASM + API, fussier than a plain API):
    a trailing slash (`/reinspect`).
 3. **COOP/COEP must pass through** — Moorhen's WASM needs
    `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
-   require-corp` (the server sets them on every response). If the proxy strips
-   them the viewer breaks. Preserve them unmodified.
+   require-corp` + `Cross-Origin-Resource-Policy` (the server sets all three).
+   If the proxy strips them the viewer breaks. Preserve them unmodified.
+4. **Moorhen assets — origin-rooted under a mount.** Moorhen builds its worker
+   (`${urlPrefix}/wasm/CootWorker.js`) from `urlPrefix`, whose default
+   mis-resolves under `/reinspect`. So **only when path-mounted**, `InspectPage`
+   pins `urlPrefix` to the ORIGIN-ROOTED `/MoorhenAssets` — which **bypasses
+   `/reinspect` and hits the host's `/MoorhenAssets` handler** (served with
+   cross-origin CORP). The host must serve `/MoorhenAssets/*` (Materia does).
+   `monomerLibraryPath` is pinned to the canonical GitHub monomer library (the
+   host serves the JS/wasm but not the monomer `.cif`s). Desktop (BASE_URL "/")
+   keeps Moorhen's defaults untouched (no viewer change).
