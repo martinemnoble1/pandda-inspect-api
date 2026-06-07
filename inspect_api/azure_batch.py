@@ -23,6 +23,7 @@ Design notes:
   and the Reinspect container see, so ingest-on-success reads it in place.
 """
 import os
+import re
 import shlex
 from pathlib import Path
 
@@ -61,14 +62,31 @@ def log_pointer(endpoint: str, job_id: str, task_id: str) -> str:
     return f"{base}/jobs/{job_id}/tasks/{task_id}/files/stdout.txt"
 
 
-# cell_volume_class -> --local_cpus, sized for a ~128 GiB Batch node (a PanDDA2
-# worker is memory-hungry, so this is memory-bound). Unmapped classes (small /
-# medium / unset) return None ⇒ omit the flag ⇒ PanDDA2's own default applies.
+# cell_volume_class -> --local_cpus. Large cells need lots of RAM per worker, so
+# cap workers HARD regardless of core count (a PanDDA2 worker is memory-hungry).
 _CPUS_BY_CELL_CLASS = {"large": 2, "huge": 1}
 
 
-def _pick_cpus(sizing_hint: dict):
-    return _CPUS_BY_CELL_CLASS.get((sizing_hint or {}).get("cell_volume_class"))
+def _vcpus_from_vm_size(vm_size: str):
+    """Best-effort vCPU count from an Azure VM size, e.g.
+    'Standard_E16ds_v4' -> 16, and constrained 'Standard_E32-8ds_v4' -> 8
+    (the usable count). None if it can't be parsed."""
+    m = re.match(r"(?i)^standard_[a-z]+(\d+)(?:-(\d+))?", vm_size or "")
+    if not m:
+        return None
+    return int(m.group(2) or m.group(1))
+
+
+def _pick_cpus(sizing_hint: dict, vm_size: str = None):
+    """Default --local_cpus for the Batch node. Large/huge cells get a hard
+    memory cap; otherwise use the node's vCPU count (so a 16-core box isn't left
+    at PanDDA2's default of 6). None ⇒ omit the flag (PanDDA2's own default).
+    NB: derive from the POOL's vm_size, never os.cpu_count() — the runner runs
+    in the Container App, a different machine from the Batch node."""
+    cls = (sizing_hint or {}).get("cell_volume_class")
+    if cls in _CPUS_BY_CELL_CLASS:
+        return _CPUS_BY_CELL_CLASS[cls]
+    return _vcpus_from_vm_size(vm_size)
 
 
 def normalise_task_state(task) -> dict:
@@ -117,9 +135,9 @@ class AzureBatchRunner:
         )
         # Injectable for tests; built lazily from env otherwise.
         self._client = client if client is not None else self._build_client()
-        # Cached pool container config (None = non-container pool); _UNSET until
-        # first looked up.
-        self._pool_cfg = _UNSET
+        # Cached pool object (None if it can't be fetched); _UNSET until first
+        # looked up. Used for both container config and vm_size.
+        self._pool_obj = _UNSET
 
     def _build_client(self):
         if not self.endpoint or not self.pool_id:
@@ -199,34 +217,40 @@ class AzureBatchRunner:
 
         from .jobs import build_pandda2_argv
 
-        # Size --local_cpus for the (big, memory-rich) Batch node. Precedence:
+        # Size --local_cpus for the Batch node. Precedence:
         # AZURE_BATCH_LOCAL_CPUS (operator escape hatch) > an explicit trigger
-        # param > the sizing-hint mapping > omit (PanDDA2's own default). A
-        # PanDDA2 worker is memory-hungry, so this is memory- not CPU-bound.
+        # param > large/huge cell memory cap > the pool VM's vCPU count > omit
+        # (PanDDA2's own default). cpu_count() is NOT used — the runner runs in
+        # the Container App, not on the Batch node.
         params = dict(spec.params)
         env = os.environ.get("AZURE_BATCH_LOCAL_CPUS")
         if env:
             params["local_cpus"] = int(env)
         elif params.get("local_cpus") is None:
-            cpus = _pick_cpus(spec.sizing_hint or {})
+            cpus = _pick_cpus(spec.sizing_hint or {}, self._pool_vm_size())
             if cpus is not None:
                 params["local_cpus"] = cpus
         spec = replace(spec, params=params)
         return " ".join(shlex.quote(a) for a in build_pandda2_argv(spec))
 
+    def _pool(self):
+        """The pool object, cached. Best-effort (any error → None)."""
+        if self._pool_obj is _UNSET:
+            try:
+                self._pool_obj = self._client.get_pool(self.pool_id)
+            except Exception:  # noqa: BLE001 - treat as unknown pool
+                self._pool_obj = None
+        return self._pool_obj
+
     def _pool_container_config(self):
         """The pool's container configuration, or None for a non-container
-        pool. Cached; one get_pool call. Best-effort (any error → None)."""
-        if self._pool_cfg is _UNSET:
-            try:
-                pool = self._client.get_pool(self.pool_id)
-                vmc = getattr(pool, "virtual_machine_configuration", None)
-                self._pool_cfg = getattr(
-                    vmc, "container_configuration", None
-                ) if vmc else None
-            except Exception:  # noqa: BLE001 - treat as non-container pool
-                self._pool_cfg = None
-        return self._pool_cfg
+        pool."""
+        vmc = getattr(self._pool(), "virtual_machine_configuration", None)
+        return getattr(vmc, "container_configuration", None) if vmc else None
+
+    def _pool_vm_size(self):
+        """The pool's VM size string (e.g. 'Standard_E16ds_v4'), or None."""
+        return getattr(self._pool(), "vm_size", None)
 
     def _container_settings(self, bm):
         """Task container settings, mirroring the pool's image + registry.

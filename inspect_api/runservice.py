@@ -150,6 +150,19 @@ def submit_run(
         # Explicit retry: never dedupe against the parent — fresh unique key.
         key = f"{base_key}:retry:{uuid.uuid4().hex}"
 
+    # Create the output dir's LEAF, but require its parent to already exist —
+    # a missing parent means the share isn't mounted or share_path is wrong, so
+    # fail loudly here (clear 400) rather than dispatch a run that dies
+    # cryptically on the node. We deliberately do NOT mkdir -p: silently
+    # building a deep tree would mask a bad path.
+    out_dir = Path(_default_out_dir(share_path, group))
+    if not out_dir.parent.is_dir():
+        raise RunError(
+            f"output parent {out_dir.parent} does not exist — is the share "
+            "mounted and share_path correct?"
+        )
+    out_dir.mkdir(exist_ok=True)
+
     project, _ = Project.objects.get_or_create(
         external_id=project_external_id,
         defaults={"name": project_external_id, "source_root": share_path},
@@ -159,7 +172,7 @@ def submit_run(
         project=project,
         group=group,
         share_path=share_path,
-        out_dir=_default_out_dir(share_path, group),
+        out_dir=str(out_dir),
         sizing_hint=sizing_hint or {},
         params=params,
         idempotency_key=key,

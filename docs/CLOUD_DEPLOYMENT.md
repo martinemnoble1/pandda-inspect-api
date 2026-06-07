@@ -193,10 +193,16 @@ boot against an already-migrated DB (the idempotent re-run is a no-op).
 **Azure Batch** — read by `AzureBatchRunner` (`PANDDA_JOB_RUNNER=azure_batch`;
 needs `azure-batch` + `azure-identity` from requirements-cloud). Names adopted
 from Materia's convention: `AZURE_BATCH_ACCOUNT_ENDPOINT`,
-`AZURE_BATCH_ACCOUNT_NAME`, `AZURE_BATCH_POOL_ID`, plus optional
-`AZURE_BATCH_JOB_ID` (default `pandda-runs`). Pool auth via
+`AZURE_BATCH_ACCOUNT_NAME`, `AZURE_BATCH_POOL_ID`. Pool auth via
 `DefaultAzureCredential` → the Container App's managed identity (Batch
 contributor).
+
+> **`AZURE_BATCH_JOB_ID` (default `pandda-runs`) — set it per tenant when
+> sharing a Batch account.** Tasks are named `run-<run_id>` under this job, and
+> `run_id` is each deployment's own DB PK — so two Reinspect deployments sharing
+> one Batch account *will* collide on `run-1`, `run-2`, … in the shared
+> `pandda-runs` job. Give each tenant a distinct value (e.g. `pandda-runs-ddu`,
+> `pandda-runs-demo`) to keep their task namespaces separate.
 
 A **container-enabled pool** requires every task to carry container settings,
 so the runner attaches them automatically: it reads the pool's first container
@@ -206,13 +212,20 @@ the share into the task container. Override with `AZURE_BATCH_CONTAINER_IMAGE`
 `-v /mnt/projects:/mnt/projects`). A non-container pool gets no container
 settings.
 
-**Sizing `--local_cpus`.** A PanDDA2 worker is memory-hungry, so on a big node
-(e.g. 16 vCPU / 128 GiB) the right worker count is memory- not CPU-bound. The
-runner picks it by precedence: `AZURE_BATCH_LOCAL_CPUS` (operator escape hatch)
-> an explicit trigger `params.local_cpus` > the `sizing_hint.cell_volume_class`
-mapping (`large`→2 ≈ 64 GiB/worker, `huge`→1 ≈ 128 GiB) > **omit**, letting
-PanDDA2 apply its own default (~6 — fine for small/medium cells on a 128 GiB
-node). The desktop/local runner stays at 1 (a workstation).
+**Sizing `--local_cpus`.** Precedence: `AZURE_BATCH_LOCAL_CPUS` (operator escape
+hatch) > an explicit trigger `params.local_cpus` > the
+`sizing_hint.cell_volume_class` memory cap (`large`→2 ≈ 64 GiB/worker,
+`huge`→1 ≈ 128 GiB) > **the pool VM's vCPU count** (parsed from `vm_size`, e.g.
+`Standard_E16ds_v4`→16, constrained `Standard_E32-8ds_v4`→8) > omit (PanDDA2's
+own default). So an un-tuned run uses the whole node rather than PanDDA2's
+default of 6. The desktop/local runner stays at 1 (a workstation).
+
+> **Memory caveat:** the vCPU-count default is throughput-oriented and ignores
+> per-worker RAM — a PanDDA2 worker is memory-hungry, so on big/huge cells the
+> full core count can OOM. Use `sizing_hint.cell_volume_class` (caps to 2/1) or
+> pin `AZURE_BATCH_LOCAL_CPUS` for memory-bound workloads. (And note: the vCPU
+> count comes from the *pool's* `vm_size`, not `os.cpu_count()` — the runner
+> runs in the Container App, a different machine from the Batch node.)
 
 **Caveat:** the runner's lifecycle + container-settings logic is unit-tested
 against a mocked SDK; the SDK wire calls still need one validation run against a
