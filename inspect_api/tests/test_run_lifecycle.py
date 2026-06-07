@@ -128,10 +128,22 @@ class RunApiTest(TestCase):
         self.tmp = tempfile.mkdtemp()
         self.share = str(Path(self.tmp) / "pandda_inputs" / "grp")
         Path(self.share, "datasets").mkdir(parents=True)
+        # The out_dir parent (…/pandda_results) must exist — submit_run creates
+        # only the leaf and refuses a missing parent.
+        Path(self.tmp, "pandda_results").mkdir()
         self.body = {
             "project": "CDK4", "group": "grp", "share_path": self.share,
             "input_hash": "h1",
         }
+
+    def test_missing_out_dir_parent_rejected(self):
+        bad = {**self.body, "group": "nope",
+               "share_path": str(Path(self.tmp) / "absent" / "g")}
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(FakeRunner()):
+            resp = self.client.post("/api/v1/runs/", bad, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("does not exist", resp.json()["detail"])
 
     def _patch_runner(self, runner):
         return mock.patch.object(runservice, "get_runner",

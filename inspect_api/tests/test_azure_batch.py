@@ -38,9 +38,11 @@ def _task(state, exit_code=None, failure_message=None):
     return SimpleNamespace(state=state, execution_info=info)
 
 
-def _container_pool(image="materia/pandda:latest", registries=None):
+def _container_pool(image="materia/pandda:latest", registries=None,
+                    vm_size="Standard_E16ds_v4"):
     """A pool object shaped like a container-enabled Batch pool."""
     return SimpleNamespace(
+        vm_size=vm_size,
         virtual_machine_configuration=SimpleNamespace(
             container_configuration=SimpleNamespace(
                 container_image_names=[image],
@@ -255,15 +257,26 @@ class RefreshRunConsumesBatchStatusTest(TestCase):
 class LocalCpusTest(TestCase):
     """--local_cpus sizing for the Batch node (memory-bound)."""
 
+    def test_vcpus_from_vm_size(self):
+        self.assertEqual(ab._vcpus_from_vm_size("Standard_E16ds_v4"), 16)
+        # Constrained-core size → usable count.
+        self.assertEqual(ab._vcpus_from_vm_size("Standard_E32-8ds_v4"), 8)
+        self.assertEqual(ab._vcpus_from_vm_size("Standard_D8as_v5"), 8)
+        self.assertIsNone(ab._vcpus_from_vm_size("weird"))
+        self.assertIsNone(ab._vcpus_from_vm_size(None))
+
     def test_pick_cpus_mapping(self):
         self.assertEqual(ab._pick_cpus({"cell_volume_class": "large"}), 2)
         self.assertEqual(ab._pick_cpus({"cell_volume_class": "huge"}), 1)
-        self.assertIsNone(ab._pick_cpus({"cell_volume_class": "small"}))
-        self.assertIsNone(ab._pick_cpus({}))
+        # Unmapped class falls through to the VM's vCPU count.
+        self.assertEqual(
+            ab._pick_cpus({"cell_volume_class": "small"},
+                          "Standard_E16ds_v4"), 16)
+        self.assertIsNone(ab._pick_cpus({}))  # no vm_size → None
 
-    def _cmd(self, sizing=None, params=None):
+    def _cmd(self, sizing=None, params=None, pool=None):
         runner = ab.AzureBatchRunner(
-            client=FakeBatchClient(), pool_id="p", endpoint="e",
+            client=FakeBatchClient(pool=pool), pool_id="p", endpoint="e",
         )
         return runner._command_line(JobSpec(
             tool="pandda2.analyse",
@@ -272,20 +285,27 @@ class LocalCpusTest(TestCase):
             sizing_hint=sizing or {},
         ))
 
-    def test_large_sizing_sets_two(self):
-        self.assertIn("--local_cpus 2",
-                      self._cmd({"cell_volume_class": "large"}))
+    def test_default_uses_pool_vcpus(self):
+        cmd = self._cmd({}, pool=_container_pool(vm_size="Standard_E16ds_v4"))
+        self.assertIn("--local_cpus 16", cmd)  # not PanDDA2's default of 6
 
-    def test_default_sizing_omits_flag(self):
+    def test_large_caps_even_on_big_node(self):
+        cmd = self._cmd({"cell_volume_class": "large"},
+                        pool=_container_pool(vm_size="Standard_E16ds_v4"))
+        self.assertIn("--local_cpus 2", cmd)  # memory cap beats core count
+
+    def test_no_pool_info_omits_flag(self):
         self.assertNotIn("--local_cpus", self._cmd({}))
 
     def test_explicit_param_beats_sizing(self):
-        cmd = self._cmd({"cell_volume_class": "large"}, {"local_cpus": "4"})
+        cmd = self._cmd({"cell_volume_class": "large"}, {"local_cpus": "4"},
+                        pool=_container_pool())
         self.assertIn("--local_cpus 4", cmd)
 
     def test_env_overrides_everything(self):
         with mock.patch.dict("os.environ",
                              {"AZURE_BATCH_LOCAL_CPUS": "12"}):
             cmd = self._cmd({"cell_volume_class": "large"},
-                            {"local_cpus": "4"})
+                            {"local_cpus": "4"},
+                            pool=_container_pool(vm_size="Standard_E16ds_v4"))
         self.assertIn("--local_cpus 12", cmd)
