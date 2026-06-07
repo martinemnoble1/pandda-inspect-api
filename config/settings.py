@@ -105,6 +105,15 @@ REFINE_TOOL = os.environ.get("REFINE_TOOL", "servalcat")
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Store + emit timezone-aware UTC. Without this, Django defaults to USE_TZ=False
+# and TIME_ZONE="America/Chicago", so timezone.now() records naive local
+# wall-clock and DRF serializes timestamps with NO offset (e.g.
+# "2026-06-07T13:06:42") — which a browser then misreads as its OWN local time,
+# inflating run durations. USE_TZ=True makes now() aware UTC and DRF appends a
+# "Z", so submitted_at/started_at/completed_at are unambiguous everywhere.
+TIME_ZONE = "UTC"
+USE_TZ = True
+
 # Base URL of the Reinspect UI, used to build the ``ui_url`` a run-trigger
 # caller (Materia) redirects to. Empty ⇒ derive from the request origin
 # (fine for the single-origin desktop/dev binding); set it in a split-origin
