@@ -457,9 +457,15 @@ class RunViewSet(
 
     def get_queryset(self):
         qs = Run.objects.select_related("project")
+        # ``project`` (external_id) is the caller-facing key; ``project_id``
+        # (our PK) lets the project dashboard list its own runs without knowing
+        # the external_id. No filter ⇒ the global runs list (newest-first).
         project = self.request.query_params.get("project")
         if project:
             qs = qs.filter(project__external_id=project)
+        project_id = self.request.query_params.get("project_id")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
         group = self.request.query_params.get("group")
         if group:
             qs = qs.filter(group=group)

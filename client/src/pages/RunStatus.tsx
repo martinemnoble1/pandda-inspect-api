@@ -4,7 +4,6 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   CircularProgress,
   Container,
   LinearProgress,
@@ -12,21 +11,10 @@ import {
   Typography,
 } from "@mui/material";
 import { api, type Run, type RunStatusValue } from "../api";
+import { RunStatusChip } from "../components/RunList";
 
 const TERMINAL: RunStatusValue[] = ["succeeded", "failed", "cancelled"];
 const POLL_MS = 3000;
-
-const STATUS_COLOR: Record<
-  RunStatusValue,
-  "default" | "info" | "success" | "error" | "warning"
-> = {
-  queued: "default",
-  provisioning: "info",
-  running: "info",
-  succeeded: "success",
-  failed: "error",
-  cancelled: "warning",
-};
 
 // Landing page for a triggered PanDDA run: the API's ui_url points here
 // (/runs/<id>). Polls the run until it reaches a terminal state, surfacing
@@ -87,11 +75,7 @@ export function RunStatus() {
         {run && (
           <Stack spacing={3} sx={{ mt: 2 }}>
             <Stack direction="row" spacing={1.5} alignItems="center">
-              <Chip
-                label={run.status}
-                color={STATUS_COLOR[run.status]}
-                sx={{ textTransform: "capitalize" }}
-              />
+              <RunStatusChip status={run.status} />
               <Typography color="text.secondary">
                 {run.project} / {run.group}
               </Typography>
