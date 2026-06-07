@@ -19,9 +19,14 @@ const tenantId = import.meta.env.VITE_AAD_TENANT_ID as string | undefined;
 
 export const authEnabled: boolean = Boolean(clientId && tenantId);
 
-// Resource scope for Reinspect's API (the AAD app exposes user_impersonation;
-// .default requests all statically-consented scopes).
-const SCOPES = clientId ? [`api://${clientId}/.default`] : [];
+// Resource scope for Reinspect's API. GUID form (`<client-id>/.default`), NOT
+// the URI form (`api://<client-id>/.default`): this deploy uses ONE AAD app for
+// both the SPA client and the API audience, and AAD rejects a client requesting
+// a token for itself via the URI form (AADSTS90009) — only the GUID-based app
+// identifier is accepted for that self-resource case. The resulting token's
+// `aud` is the same client-id, so the backend validates it identically. (If SPA
+// and API are ever split into two app regs, switch to `api://<api-id>/...`.)
+const SCOPES = clientId ? [`${clientId}/.default`] : [];
 
 let msalPromise: Promise<IPublicClientApplication> | null = null;
 

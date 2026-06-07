@@ -82,9 +82,16 @@ The backend middleware validates bearers; the **SPA acquires one** via MSAL and
 attaches it to every call. This is **build-time opt-in**: the client build sets
 `VITE_AAD_CLIENT_ID` + `VITE_AAD_TENANT_ID` (non-secret public IDs — both as
 Docker `--build-arg`s). Both set ⇒ the SPA runs an AAD redirect login on load,
-acquires `api://<client-id>/.default`, and sends `Authorization: Bearer …` on
-API calls; **both unset ⇒ no MSAL, no header — the desktop/dev flow is
-identical** (MSAL is a dynamic chunk that's never loaded).
+acquires the **GUID-form** scope `<client-id>/.default`, and sends
+`Authorization: Bearer …` on API calls; **both unset ⇒ no MSAL, no header — the
+desktop/dev flow is identical** (MSAL is a dynamic chunk that's never loaded).
+
+> **Scope shape (AADSTS90009):** this deploy uses ONE AAD app for both the SPA
+> client and the API audience, so the SPA requests a token for *itself*. AAD
+> only allows that with the GUID-form scope (`<client-id>/.default`), not the
+> URI form (`api://<client-id>/.default`). The token's `aud` is identical either
+> way. Split into two app regs only if you later need delegated
+> Graph/on-behalf-of flows — then switch to `api://<api-client-id>/…`.
 
 - **Register the redirect URI** on the AAD app: `<origin><VITE_BASE>/`
   (e.g. `https://<materia-host>/reinspect/`).
