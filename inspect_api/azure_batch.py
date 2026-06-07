@@ -30,6 +30,15 @@ from pathlib import Path
 # / running / completed). Anything not terminal maps to our "running".
 _RUNNING_STATES = {"active", "preparing", "running"}
 
+# Sentinel for "pool container config not yet looked up" (None is a valid
+# result meaning "non-container pool").
+_UNSET = object()
+
+# Default container run options. A container-enabled Batch node mounts the
+# share (e.g. at /mnt/projects) via the pool startTask; the task container must
+# bind-mount it to see the same tree. Overridable per deployment.
+_DEFAULT_RUN_OPTIONS = "-v /mnt/projects:/mnt/projects"
+
 
 def split_handle(handle: str):
     """``"<job_id>/<task_id>"`` -> ``(job_id, task_id)``."""
@@ -98,6 +107,9 @@ class AzureBatchRunner:
         )
         # Injectable for tests; built lazily from env otherwise.
         self._client = client if client is not None else self._build_client()
+        # Cached pool container config (None = non-container pool); _UNSET until
+        # first looked up.
+        self._pool_cfg = _UNSET
 
     def _build_client(self):
         if not self.endpoint or not self.pool_id:
@@ -130,11 +142,15 @@ class AzureBatchRunner:
 
         self._ensure_job(bm)
         task_id = f"run-{Path(workdir).name}"
+        kwargs = {"id": task_id, "command_line": self._command_line(spec)}
+        # A container-enabled pool REQUIRES every task to carry its own
+        # container settings ("Container-enabled compute node requires task
+        # container settings"); a non-container pool gets none.
+        container = self._container_settings(bm)
+        if container is not None:
+            kwargs["container_settings"] = container
         self._client.create_task(
-            self.job_id,
-            bm.BatchTaskCreateOptions(
-                id=task_id, command_line=self._command_line(spec)
-            ),
+            self.job_id, bm.BatchTaskCreateOptions(**kwargs)
         )
         return make_handle(self.job_id, task_id)
 
@@ -172,6 +188,49 @@ class AzureBatchRunner:
         from .jobs import build_pandda2_argv
 
         return " ".join(shlex.quote(a) for a in build_pandda2_argv(spec))
+
+    def _pool_container_config(self):
+        """The pool's container configuration, or None for a non-container
+        pool. Cached; one get_pool call. Best-effort (any error → None)."""
+        if self._pool_cfg is _UNSET:
+            try:
+                pool = self._client.get_pool(self.pool_id)
+                vmc = getattr(pool, "virtual_machine_configuration", None)
+                self._pool_cfg = getattr(
+                    vmc, "container_configuration", None
+                ) if vmc else None
+            except Exception:  # noqa: BLE001 - treat as non-container pool
+                self._pool_cfg = None
+        return self._pool_cfg
+
+    def _container_settings(self, bm):
+        """Task container settings, mirroring the pool's image + registry.
+
+        Returns None for a non-container pool (so the task carries none). The
+        image defaults to the pool's first container image (overridable via
+        AZURE_BATCH_CONTAINER_IMAGE); the registry is the pool's first
+        registry (so ACR auth matches the pool). The bind-mount run options
+        default to the share path, overridable via
+        AZURE_BATCH_CONTAINER_RUN_OPTIONS.
+        """
+        image = os.environ.get("AZURE_BATCH_CONTAINER_IMAGE")
+        registry = None
+        if not image:
+            cfg = self._pool_container_config()
+            images = getattr(cfg, "container_image_names", None) if cfg else None
+            if not images:
+                return None  # non-container pool → no task container settings
+            image = images[0]
+            regs = getattr(cfg, "container_registries", None) or []
+            registry = regs[0] if regs else None
+        run_options = os.environ.get(
+            "AZURE_BATCH_CONTAINER_RUN_OPTIONS", _DEFAULT_RUN_OPTIONS
+        )
+        return bm.BatchTaskContainerSettings(
+            image_name=image,
+            container_run_options=run_options,
+            registry=registry,
+        )
 
     def _read_stdout(self, job_id: str, task_id: str) -> str:
         try:

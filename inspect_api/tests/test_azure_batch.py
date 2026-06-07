@@ -38,16 +38,32 @@ def _task(state, exit_code=None, failure_message=None):
     return SimpleNamespace(state=state, execution_info=info)
 
 
+def _container_pool(image="materia/pandda:latest", registries=None):
+    """A pool object shaped like a container-enabled Batch pool."""
+    return SimpleNamespace(
+        virtual_machine_configuration=SimpleNamespace(
+            container_configuration=SimpleNamespace(
+                container_image_names=[image],
+                container_registries=registries or [],
+            )
+        )
+    )
+
+
 class FakeBatchClient:
-    def __init__(self, task=None, stdout=b""):
+    def __init__(self, task=None, stdout=b"", pool=None):
         self._task = task
         self._stdout = stdout
+        self._pool = pool
         self.created_jobs = []
         self.created_tasks = []
         self.terminated = []
 
     def pool_exists(self, pool_id):
         return True
+
+    def get_pool(self, pool_id):
+        return self._pool
 
     def get_task(self, job_id, task_id):
         return self._task
@@ -156,6 +172,43 @@ class RunnerWithFakeClientTest(TestCase):
         self.assertEqual(len(client.created_jobs), 1)        # _ensure_job
         self.assertEqual(len(client.created_tasks), 1)
         self.assertEqual(client.created_tasks[0][0], "pandda-runs")
+        # Non-container pool (get_pool → None): no container_settings.
+        _, task = client.created_tasks[0]
+        self.assertIsNone(getattr(task, "container_settings", None))
+
+    @unittest.skipUnless(_azure_batch_available(),
+                         "azure-batch not installed")
+    def test_submit_attaches_container_settings_for_container_pool(self):
+        client = FakeBatchClient(pool=_container_pool())
+        self._runner(client=client).submit(
+            JobSpec(tool="pandda2.analyse",
+                    inputs={"data_dirs": "/in/datasets"},
+                    params={"out_dir": "/out"}),
+            Path("/tmp/runs/9"),
+        )
+        _, task = client.created_tasks[0]
+        cs = task.container_settings
+        self.assertEqual(cs.image_name, "materia/pandda:latest")
+        self.assertIn("/mnt/projects", cs.container_run_options)
+
+    @unittest.skipUnless(_azure_batch_available(),
+                         "azure-batch not installed")
+    def test_container_image_env_override(self):
+        client = FakeBatchClient(pool=_container_pool())
+        with mock.patch.dict(
+            "os.environ",
+            {"AZURE_BATCH_CONTAINER_IMAGE": "myacr.io/pandda:pinned",
+             "AZURE_BATCH_CONTAINER_RUN_OPTIONS": "-v /data:/data"},
+        ):
+            self._runner(client=client).submit(
+                JobSpec(tool="pandda2.analyse",
+                        inputs={"data_dirs": "/in/datasets"},
+                        params={"out_dir": "/out"}),
+                Path("/tmp/runs/10"),
+            )
+        cs = client.created_tasks[0][1].container_settings
+        self.assertEqual(cs.image_name, "myacr.io/pandda:pinned")
+        self.assertEqual(cs.container_run_options, "-v /data:/data")
 
 
 class RefreshRunConsumesBatchStatusTest(TestCase):
