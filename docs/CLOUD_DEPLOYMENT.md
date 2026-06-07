@@ -206,6 +206,14 @@ the share into the task container. Override with `AZURE_BATCH_CONTAINER_IMAGE`
 `-v /mnt/projects:/mnt/projects`). A non-container pool gets no container
 settings.
 
+**Sizing `--local_cpus`.** A PanDDA2 worker is memory-hungry, so on a big node
+(e.g. 16 vCPU / 128 GiB) the right worker count is memory- not CPU-bound. The
+runner picks it by precedence: `AZURE_BATCH_LOCAL_CPUS` (operator escape hatch)
+> an explicit trigger `params.local_cpus` > the `sizing_hint.cell_volume_class`
+mapping (`large`→2 ≈ 64 GiB/worker, `huge`→1 ≈ 128 GiB) > **omit**, letting
+PanDDA2 apply its own default (~6 — fine for small/medium cells on a 128 GiB
+node). The desktop/local runner stays at 1 (a workstation).
+
 **Caveat:** the runner's lifecycle + container-settings logic is unit-tested
 against a mocked SDK; the SDK wire calls still need one validation run against a
 live Batch account before production (Materia owns that integration test).

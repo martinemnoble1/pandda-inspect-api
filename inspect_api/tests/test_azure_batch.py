@@ -250,3 +250,42 @@ class RefreshRunConsumesBatchStatusTest(TestCase):
         self.run.refresh_from_db()
         self.assertEqual(self.run.status, "failed")
         self.assertEqual(self.run.failure_mode, "oom")
+
+
+class LocalCpusTest(TestCase):
+    """--local_cpus sizing for the Batch node (memory-bound)."""
+
+    def test_pick_cpus_mapping(self):
+        self.assertEqual(ab._pick_cpus({"cell_volume_class": "large"}), 2)
+        self.assertEqual(ab._pick_cpus({"cell_volume_class": "huge"}), 1)
+        self.assertIsNone(ab._pick_cpus({"cell_volume_class": "small"}))
+        self.assertIsNone(ab._pick_cpus({}))
+
+    def _cmd(self, sizing=None, params=None):
+        runner = ab.AzureBatchRunner(
+            client=FakeBatchClient(), pool_id="p", endpoint="e",
+        )
+        return runner._command_line(JobSpec(
+            tool="pandda2.analyse",
+            inputs={"data_dirs": "/in/datasets"},
+            params={"out_dir": "/out", **(params or {})},
+            sizing_hint=sizing or {},
+        ))
+
+    def test_large_sizing_sets_two(self):
+        self.assertIn("--local_cpus 2",
+                      self._cmd({"cell_volume_class": "large"}))
+
+    def test_default_sizing_omits_flag(self):
+        self.assertNotIn("--local_cpus", self._cmd({}))
+
+    def test_explicit_param_beats_sizing(self):
+        cmd = self._cmd({"cell_volume_class": "large"}, {"local_cpus": "4"})
+        self.assertIn("--local_cpus 4", cmd)
+
+    def test_env_overrides_everything(self):
+        with mock.patch.dict("os.environ",
+                             {"AZURE_BATCH_LOCAL_CPUS": "12"}):
+            cmd = self._cmd({"cell_volume_class": "large"},
+                            {"local_cpus": "4"})
+        self.assertIn("--local_cpus 12", cmd)

@@ -180,6 +180,8 @@ def _dispatch(run: Run) -> None:
         inputs={"data_dirs": str(Path(run.share_path) / "datasets")},
         # Server-computed out_dir + the trigger's allowlisted overrides.
         params={"out_dir": run.out_dir, **run.params},
+        # Resource hint for the runner to size compute (e.g. --local_cpus).
+        sizing_hint=run.sizing_hint or {},
     )
     try:
         handle = get_runner().submit(spec, workdir)

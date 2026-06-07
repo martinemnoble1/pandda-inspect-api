@@ -81,6 +81,19 @@ class RunArgvTest(TestCase):
         self.assertIn("--pdb_regex", argv)
         self.assertIn("--ligand_cif_regex", argv)
 
+    def test_builder_omits_local_cpus_when_absent(self):
+        from inspect_api.jobs import build_pandda2_argv
+        argv = build_pandda2_argv(JobSpec(
+            tool="pandda2.analyse", inputs={"data_dirs": "/in"},
+            params={"out_dir": "/out"}))
+        self.assertNotIn("--local_cpus", argv)  # → PanDDA2's own default
+
+    def test_local_runner_defaults_cpus_to_one(self):
+        argv, _ = LocalProcessRunner()._build_argv(JobSpec(
+            tool="pandda2.analyse", inputs={"data_dirs": "/in"},
+            params={"out_dir": "/out"}), Path("/wd"))
+        self.assertEqual(argv[argv.index("--local_cpus") + 1], "1")
+
 
 class ClassifyFailureTest(TestCase):
     def test_oom(self):
