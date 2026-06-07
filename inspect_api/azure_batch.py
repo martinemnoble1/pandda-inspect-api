@@ -61,6 +61,16 @@ def log_pointer(endpoint: str, job_id: str, task_id: str) -> str:
     return f"{base}/jobs/{job_id}/tasks/{task_id}/files/stdout.txt"
 
 
+# cell_volume_class -> --local_cpus, sized for a ~128 GiB Batch node (a PanDDA2
+# worker is memory-hungry, so this is memory-bound). Unmapped classes (small /
+# medium / unset) return None ⇒ omit the flag ⇒ PanDDA2's own default applies.
+_CPUS_BY_CELL_CLASS = {"large": 2, "huge": 1}
+
+
+def _pick_cpus(sizing_hint: dict):
+    return _CPUS_BY_CELL_CLASS.get((sizing_hint or {}).get("cell_volume_class"))
+
+
 def normalise_task_state(task) -> dict:
     """Map a Batch task object onto the normalised runner-status dict.
 
@@ -185,8 +195,23 @@ class AzureBatchRunner:
             pass
 
     def _command_line(self, spec) -> str:
+        from dataclasses import replace
+
         from .jobs import build_pandda2_argv
 
+        # Size --local_cpus for the (big, memory-rich) Batch node. Precedence:
+        # AZURE_BATCH_LOCAL_CPUS (operator escape hatch) > an explicit trigger
+        # param > the sizing-hint mapping > omit (PanDDA2's own default). A
+        # PanDDA2 worker is memory-hungry, so this is memory- not CPU-bound.
+        params = dict(spec.params)
+        env = os.environ.get("AZURE_BATCH_LOCAL_CPUS")
+        if env:
+            params["local_cpus"] = int(env)
+        elif params.get("local_cpus") is None:
+            cpus = _pick_cpus(spec.sizing_hint or {})
+            if cpus is not None:
+                params["local_cpus"] = cpus
+        spec = replace(spec, params=params)
         return " ".join(shlex.quote(a) for a in build_pandda2_argv(spec))
 
     def _pool_container_config(self):

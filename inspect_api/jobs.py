@@ -26,7 +26,7 @@ import os
 import shlex
 import signal
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -41,6 +41,10 @@ class JobSpec:
     # the HTTP request stays path-free.
     inputs: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
+    # Abstract resource hint ({datasets, cell_volume_class}) — context for the
+    # RUNNER to size compute (AzureBatchRunner picks --local_cpus from it); not
+    # a tool flag. Runners that don't size from it ignore it.
+    sizing_hint: dict = field(default_factory=dict)
     # Note: no scheduler flags, no "where" — those belong to the JobRunner.
 
 
@@ -63,17 +67,23 @@ def build_pandda2_argv(spec: JobSpec, tool: str = "pandda2.analyse") -> list:
     all are overridable so the contract can be tuned without code changes.
     """
     p = spec.params or {}
-    return [
+    argv = [
         tool,
         "--data_dirs", spec.inputs.get("data_dirs", ""),
         "--out_dir", p.get("out_dir", ""),
-        "--local_cpus", str(p.get("local_cpus", 1)),
         "--pdb_regex", p.get("pdb_regex", "final.pdb"),
         "--mtz_regex", p.get("mtz_regex", "final.mtz"),
         "--ligand_cif_regex", p.get("ligand_cif_regex", "dict.cif"),
         "--ligand_pdb_regex", p.get("ligand_pdb_regex", "ligand.pdb"),
         "--dataset_range", p.get("dataset_range", "0-999999999"),
     ]
+    # Only pass --local_cpus when a caller set it — omitting it lets PanDDA2
+    # apply its own default. The RUNNER decides the value for its environment
+    # (the desktop runner stays conservative; AzureBatchRunner sizes from the
+    # node), so the builder must NOT invent one.
+    if p.get("local_cpus") is not None:
+        argv += ["--local_cpus", str(p["local_cpus"])]
+    return argv
 
 
 def _activation_prologue() -> str:
@@ -217,6 +227,12 @@ class LocalProcessRunner:
             # out_dir separately. Regexes/dataset_range default to the
             # published invocation contract but are param-overridable. See
             # docs/RUN_LIFECYCLE.md (invocation contract).
+            #
+            # This binding is a workstation: default --local_cpus to 1 (a
+            # PanDDA2 worker is memory-hungry) unless the caller set it. The
+            # Batch runner sizes its own value for big nodes.
+            if spec.params.get("local_cpus") is None:
+                spec = replace(spec, params={**spec.params, "local_cpus": 1})
             return build_pandda2_argv(spec, tool), ""
 
         pdb = spec.inputs.get("pdb", "")
