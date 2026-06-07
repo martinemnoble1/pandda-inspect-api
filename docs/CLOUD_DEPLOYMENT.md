@@ -196,9 +196,19 @@ from Materia's convention: `AZURE_BATCH_ACCOUNT_ENDPOINT`,
 `AZURE_BATCH_ACCOUNT_NAME`, `AZURE_BATCH_POOL_ID`, plus optional
 `AZURE_BATCH_JOB_ID` (default `pandda-runs`). Pool auth via
 `DefaultAzureCredential` → the Container App's managed identity (Batch
-contributor). **Caveat:** the runner's lifecycle logic is unit-tested against a
-mocked SDK; the SDK wire calls still need one validation run against a live
-Batch account before production (Materia owns that integration test).
+contributor).
+
+A **container-enabled pool** requires every task to carry container settings,
+so the runner attaches them automatically: it reads the pool's first container
+image + registry (via `get_pool`) so the task matches the pool, and bind-mounts
+the share into the task container. Override with `AZURE_BATCH_CONTAINER_IMAGE`
+(default = the pool's image) and `AZURE_BATCH_CONTAINER_RUN_OPTIONS` (default
+`-v /mnt/projects:/mnt/projects`). A non-container pool gets no container
+settings.
+
+**Caveat:** the runner's lifecycle + container-settings logic is unit-tested
+against a mocked SDK; the SDK wire calls still need one validation run against a
+live Batch account before production (Materia owns that integration test).
 
 ### Ingress — path-routing (decided)
 
