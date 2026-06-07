@@ -143,6 +143,32 @@ class RunApiTest(TestCase):
             self.assertEqual(scoped["count"], 1)
             self.assertEqual(scoped["results"][0]["project"], "BAZ2B")
 
+    def test_allowlisted_params_stored_and_threaded(self):
+        fake = FakeRunner()
+        body = {**self.body, "params": {"pdb_regex": "custom.pdb",
+                                        "local_cpus": "8"}}
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(fake):
+            resp = self.client.post("/api/v1/runs/", body, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.json()["params"]["pdb_regex"], "custom.pdb")
+        # Threaded into the JobSpec the runner received (alongside out_dir).
+        spec, _ = fake.submitted[0]
+        self.assertEqual(spec.params["pdb_regex"], "custom.pdb")
+        self.assertEqual(spec.params["local_cpus"], "8")
+        self.assertIn("out_dir", spec.params)
+
+    def test_unknown_param_rejected(self):
+        with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
+                self._patch_runner(FakeRunner()):
+            resp = self.client.post(
+                "/api/v1/runs/",
+                {**self.body, "params": {"rm_rf": "/"}},
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("rm_rf", resp.json()["detail"])
+
     def test_create_201_dispatches_and_resolves_project(self):
         fake = FakeRunner()
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \

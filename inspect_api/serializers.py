@@ -300,6 +300,13 @@ class RunRequestSerializer(serializers.Serializer):
         required=False, default=dict,
         help_text="Abstract hints, e.g. {datasets, cell_volume_class}.",
     )
+    params = serializers.DictField(
+        required=False, default=dict,
+        help_text=(
+            "Allowlisted pandda2.analyse overrides (regexes, dataset_range, "
+            "local_cpus). Unknown keys are rejected."
+        ),
+    )
     retry_of = serializers.IntegerField(
         required=False, allow_null=True, default=None,
         help_text="A prior run_id this explicitly retries (never deduped).",
@@ -335,6 +342,7 @@ class RunSerializer(serializers.ModelSerializer):
             "parent_run_id",
             "triggered_by_oid",
             "sizing_hint",
+            "params",
             "submitted_at",
             "started_at",
             "completed_at",

@@ -487,6 +487,10 @@ class Run(models.Model):
     # Abstract resource hints ({datasets, cell_volume_class}); the runner maps
     # them to a SKU. No Azure/SKU types leak into the contract.
     sizing_hint = models.JSONField(default=dict, blank=True)
+    # Allowlisted pandda2.analyse overrides (regexes, dataset_range,
+    # local_cpus, …) supplied at trigger time — threaded into the run command
+    # line. Persisted for provenance/reproducibility. Empty ⇒ all defaults.
+    params = models.JSONField(default=dict, blank=True)
 
     submitted_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
