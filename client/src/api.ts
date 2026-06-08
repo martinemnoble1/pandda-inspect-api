@@ -302,13 +302,29 @@ export const api = {
     return data as Run;
   },
 
-  // Absolute URL for streaming artifact bytes (Moorhen / iframe consume these).
-  // download_url is server-emitted root-absolute (/api/v1/…); prefix it so it
-  // routes through the mount when path-mounted (no-op when PREFIX is "").
-  // These are fetched by Moorhen's OWN internal code (no header hook), so when
-  // auth is on we carry the bearer in the query string — the ccp4i2 middleware
-  // accepts ?access_token for downloads. Empty token (desktop) => bare URL.
-  artifactUrl: (a: Artifact) => {
+  // Absolute URL for streaming artifact bytes. BARE (no token): the bytes are
+  // fetched header-authenticated. download_url is server-emitted root-absolute
+  // (/api/v1/…); prefix it so it routes through the mount when path-mounted
+  // (no-op when PREFIX is ""). Header-capable callers (Moorhen's loaders, which
+  // take a RequestInit; our own fetch()es) attach authHeaders().
+  artifactUrl: (a: Artifact) => `${PREFIX}${a.download_url}`,
+
+  // Bearer in HEADER form, for fetches the SPA controls. Moorhen's
+  // loadToCootFrom*URL take a trailing RequestInit, so the token rides a header
+  // — NOT the query string. Matters on enterprise tenants: an AAD JWT with many
+  // group claims runs ~5 KB, and a token-in-URL inflates the request line past
+  // the ingress header-size cap → HTTP 431. Empty (desktop / no auth) => {} =>
+  // an unchanged plain fetch.
+  authHeaders: (): Record<string, string> => {
+    const token = cachedAccessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  },
+
+  // Token-in-URL form, ONLY for the report <iframe>: a browsing context sends
+  // no request headers, so the bearer must ride the query string there (the
+  // ccp4i2 middleware accepts ?access_token for downloads). Everything else
+  // uses header auth via authHeaders() to stay under the 431 limit.
+  artifactUrlWithToken: (a: Artifact) => {
     const url = `${PREFIX}${a.download_url}`;
     const token = cachedAccessToken();
     if (!token) return url;
