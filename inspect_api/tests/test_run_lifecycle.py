@@ -94,6 +94,17 @@ class RunArgvTest(TestCase):
             params={"out_dir": "/out"}), Path("/wd"))
         self.assertEqual(argv[argv.index("--local_cpus") + 1], "1")
 
+    def test_builder_emits_arbitrary_pandda2_flags(self):
+        from inspect_api.jobs import build_pandda2_argv
+        argv = build_pandda2_argv(JobSpec(
+            tool="pandda2.analyse", inputs={"data_dirs": "/in"},
+            params={"out_dir": "/out", "memory_availability": "high",
+                    "contour_level": "2.0"}))
+        self.assertEqual(argv[argv.index("--memory_availability") + 1], "high")
+        self.assertEqual(argv[argv.index("--contour_level") + 1], "2.0")
+        # contract defaults still seeded
+        self.assertIn("--pdb_regex", argv)
+
 
 class ClassifyFailureTest(TestCase):
     def test_oom(self):
@@ -168,20 +179,24 @@ class RunApiTest(TestCase):
             self.assertEqual(scoped["count"], 1)
             self.assertEqual(scoped["results"][0]["project"], "BAZ2B")
 
-    def test_allowlisted_params_stored_and_threaded(self):
+    def test_params_pass_through_and_thread(self):
+        # Any non-reserved pandda2 flag passes through, is stored, and reaches
+        # the JobSpec command line (here: a regex override + memory_availability
+        # + an arbitrary scientific flag).
         fake = FakeRunner()
-        body = {**self.body, "params": {"pdb_regex": "custom.pdb",
-                                        "local_cpus": "8"}}
+        body = {**self.body, "params": {
+            "pdb_regex": "custom.pdb",
+            "memory_availability": "high",
+            "max_events_per_dataset": "3",
+        }}
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
                 self._patch_runner(fake):
             resp = self.client.post("/api/v1/runs/", body, format="json")
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()["params"]["pdb_regex"], "custom.pdb")
-        # Threaded into the JobSpec the runner received (alongside out_dir).
+        self.assertEqual(resp.json()["params"]["memory_availability"], "high")
         spec, _ = fake.submitted[0]
-        self.assertEqual(spec.params["pdb_regex"], "custom.pdb")
-        self.assertEqual(spec.params["local_cpus"], "8")
-        self.assertIn("out_dir", spec.params)
+        self.assertEqual(spec.params["memory_availability"], "high")
+        self.assertEqual(spec.params["max_events_per_dataset"], "3")
 
     def test_timestamps_are_utc_with_offset(self):
         # USE_TZ=True ⇒ tz-aware UTC, serialized with a "Z" suffix, so the SPA
@@ -193,16 +208,29 @@ class RunApiTest(TestCase):
             ).json()
         self.assertTrue(data["submitted_at"].endswith("Z"))
 
-    def test_unknown_param_rejected(self):
+    def _post_params(self, params):
         with override_settings(PANDDA_JOBS_ROOT=self.tmp), \
                 self._patch_runner(FakeRunner()):
-            resp = self.client.post(
+            return self.client.post(
                 "/api/v1/runs/",
-                {**self.body, "params": {"rm_rf": "/"}},
+                {**self.body, "params": params},
                 format="json",
             )
+
+    def test_reserved_param_rejected(self):
+        # A flag Reinspect owns (here the execution-placement one) → 400.
+        resp = self._post_params({"global_processing": "distributed"})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("rm_rf", resp.json()["detail"])
+        self.assertIn("reserved", resp.json()["detail"])
+
+    def test_out_dir_param_rejected(self):
+        resp = self._post_params({"out_dir": "/evil"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_malformed_param_name_rejected(self):
+        resp = self._post_params({"rm -rf": "/"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("invalid", resp.json()["detail"])
 
     def test_create_201_dispatches_and_resolves_project(self):
         fake = FakeRunner()

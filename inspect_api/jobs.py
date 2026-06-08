@@ -55,34 +55,36 @@ class JobRunner(Protocol):
     def cancel(self, handle: str) -> None: ...
 
 
-def build_pandda2_argv(spec: JobSpec, tool: str = "pandda2.analyse") -> list:
-    """The ``pandda2.analyse`` command line — the invocation contract.
+# Flags Reinspect always sets (the invocation contract): the input regexes that
+# defeat PanDDA2's protein-grabbing defaults + a defensive dataset_range. Each
+# is overridable by a run param.
+_PANDDA2_DEFAULTS = {
+    "pdb_regex": "final.pdb",
+    "mtz_regex": "final.mtz",
+    "ligand_cif_regex": "dict.cif",
+    "ligand_pdb_regex": "ligand.pdb",
+    "dataset_range": "0-999999999",
+}
 
-    Shared by every runner: the local runner returns it as argv; the Azure
-    Batch runner joins it into a task command line. ``spec.inputs["data_dirs"]``
-    is the unzipped export_pandda input dir; ``spec.params`` carries ``out_dir``
-    (where pandda2_out/ is written), ``local_cpus``, the input regexes, and
-    ``dataset_range``. The regexes defeat PanDDA2's protein-grabbing defaults;
-    the wide dataset_range is defensive. Defaults match docs/RUN_LIFECYCLE.md;
-    all are overridable so the contract can be tuned without code changes.
+
+def build_pandda2_argv(spec: JobSpec, tool: str = "pandda2.analyse") -> list:
+    """The ``pandda2.analyse`` command line.
+
+    ``--data_dirs`` comes from ``spec.inputs``; every other flag is rendered
+    from ``spec.params`` (seeded with the contract defaults above) as
+    ``--<key> <value>`` — so ANY pandda2.analyse option the caller passes is
+    supported. ``spec.params`` is pre-validated by runservice (input/output and
+    execution-placement flags are reserved there), and out_dir / local_cpus /
+    sizing are injected by the caller/runner. A ``None`` value omits the flag
+    (e.g. local_cpus when the runner leaves it to PanDDA2). Values are quoted
+    by each runner downstream, so there is no shell-injection surface.
     """
-    p = spec.params or {}
-    argv = [
-        tool,
-        "--data_dirs", spec.inputs.get("data_dirs", ""),
-        "--out_dir", p.get("out_dir", ""),
-        "--pdb_regex", p.get("pdb_regex", "final.pdb"),
-        "--mtz_regex", p.get("mtz_regex", "final.mtz"),
-        "--ligand_cif_regex", p.get("ligand_cif_regex", "dict.cif"),
-        "--ligand_pdb_regex", p.get("ligand_pdb_regex", "ligand.pdb"),
-        "--dataset_range", p.get("dataset_range", "0-999999999"),
-    ]
-    # Only pass --local_cpus when a caller set it — omitting it lets PanDDA2
-    # apply its own default. The RUNNER decides the value for its environment
-    # (the desktop runner stays conservative; AzureBatchRunner sizes from the
-    # node), so the builder must NOT invent one.
-    if p.get("local_cpus") is not None:
-        argv += ["--local_cpus", str(p["local_cpus"])]
+    p = {**_PANDDA2_DEFAULTS, **(spec.params or {})}
+    argv = [tool, "--data_dirs", spec.inputs.get("data_dirs", "")]
+    for key, value in p.items():
+        if value is None:
+            continue
+        argv += [f"--{key}", str(value)]
     return argv
 
 

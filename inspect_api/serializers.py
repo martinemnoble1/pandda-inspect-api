@@ -303,8 +303,9 @@ class RunRequestSerializer(serializers.Serializer):
     params = serializers.DictField(
         required=False, default=dict,
         help_text=(
-            "Allowlisted pandda2.analyse overrides (regexes, dataset_range, "
-            "local_cpus). Unknown keys are rejected."
+            "pandda2.analyse flag overrides, e.g. {\"memory_availability\": "
+            "\"high\", \"contour_level\": \"2.0\"}. Any flag except the "
+            "reserved input/output + execution-placement ones is accepted."
         ),
     )
     retry_of = serializers.IntegerField(

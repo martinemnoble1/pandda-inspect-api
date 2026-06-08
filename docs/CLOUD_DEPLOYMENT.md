@@ -189,6 +189,18 @@ boot against an already-migrated DB (the idempotent re-run is a no-op).
 |-----|---------|
 | `REINSPECT_UI_BASE_URL` | base for the `ui_url` returned by `POST /runs/` (`{base}/runs/<id>`). **Decision: path-on-Materia's-domain** — set to `https://<materia-host>/reinspect`, giving `ui_url = https://<materia-host>/reinspect/runs/<id>`. Unset ⇒ derived from request origin (fine only when Reinspect is reached directly). |
 | `PANDDA_JOB_RUNNER` | `local` (default; subprocess) or `azure_batch` (the Batch runner) |
+| `PANDDA_RUN_RESERVED_PARAMS` | optional; extra pandda2 flags to forbid as run params, on top of the built-in reserved set |
+
+**Run parameters (`POST /runs/` `params`).** A trigger may override **any**
+`pandda2.analyse` flag by passing it in `params` (e.g.
+`{"memory_availability": "high", "contour_level": "2.0"}`) — it's rendered as
+`--<flag> <value>`. The exceptions are a **reserved set** Reinspect owns and
+rejects with a 400: the input/output paths (`data_dirs`, `out_dir`) and the
+execution-placement flags (`local_processing`, `global_processing`,
+`distributed_*`, `job_params_file`, `job_extra`) — those would break the
+ingest contract or the Batch execution model. Add more via
+`PANDDA_RUN_RESERVED_PARAMS`. (`local_cpus` is *not* reserved — the runner
+sizes a default but a trigger may override it.)
 
 **Azure Batch** — read by `AzureBatchRunner` (`PANDDA_JOB_RUNNER=azure_batch`;
 needs `azure-batch` + `azure-identity` from requirements-cloud). Names adopted
