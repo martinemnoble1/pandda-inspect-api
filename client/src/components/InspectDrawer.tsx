@@ -235,7 +235,9 @@ export function InspectDrawer({
           const model = ev.current_model ?? artifactOf(ev, "structure");
           if (model) {
             const mol = newMolecule(commandCentre, store);
-            await mol.loadToCootFromURL(api.artifactUrl(model), ev.dtag);
+            await mol.loadToCootFromURL(api.artifactUrl(model), ev.dtag, {
+              headers: api.authHeaders(),
+            });
             // Load the ligand restraint dictionary so the LIG residue bonds and
             // refines correctly. Without it, Moorhen auto-fetches
             // monomers/l/LIG.cif (a 404) and draws bare atoms. Our dict is
@@ -244,9 +246,9 @@ export function InspectDrawer({
             let dictLoaded = false;
             if (lig) {
               try {
-                const cif = await fetch(api.artifactUrl(lig)).then((r) =>
-                  r.ok ? r.text() : ""
-                );
+                const cif = await fetch(api.artifactUrl(lig), {
+                  headers: api.authHeaders(),
+                }).then((r) => (r.ok ? r.text() : ""));
                 if (cif) {
                   await mol.addDict(cif);
                   dictLoaded = true;
@@ -303,13 +305,16 @@ export function InspectDrawer({
             await map.loadToCootFromMapURL(
               api.artifactUrl(emap),
               `${ev.dtag}-EVENT`,
-              false
+              false,
+              false,
+              { headers: api.authHeaders() }
             );
           } else {
             await map.loadToCootFromMtzURL(
               api.artifactUrl(emap),
               `${ev.dtag}-EVENT`,
-              { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false }
+              { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false },
+              { headers: api.authHeaders() }
             );
           }
           // PanDDA event maps are real-space CCP4 maps read directly (not
@@ -419,7 +424,8 @@ export function InspectDrawer({
                   PHI: col.PHI,
                   isDifference: col.isDifference,
                   useWeight: false,
-                }
+                },
+                { headers: api.authHeaders() }
               );
               stageModelMap(mmap, col.isDifference);
             } catch (err) {
@@ -438,7 +444,8 @@ export function InspectDrawer({
               api.artifactUrl(sf),
               sf.relpath.split("/").pop() || "model.mtz",
               commandCentre,
-              store
+              store,
+              { headers: api.authHeaders() }
             );
             for (const mmap of autoMaps) {
               stageModelMap(mmap, !!mmap.isDifference);
@@ -531,15 +538,16 @@ export function InspectDrawer({
           const pmol = newMolecule(commandCentre, store);
           await pmol.loadToCootFromURL(
             api.artifactUrl(pose),
-            `${ev.dtag}-pose-${ev.event_num}`
+            `${ev.dtag}-pose-${ev.event_num}`,
+            { headers: api.authHeaders() }
           );
           // Bond the LIG with its dict (same embedded CIF as the model).
           const lig = artifactOf(ev, "ligand");
           if (lig) {
             try {
-              const cif = await fetch(api.artifactUrl(lig)).then((r) =>
-                r.ok ? r.text() : ""
-              );
+              const cif = await fetch(api.artifactUrl(lig), {
+                headers: api.authHeaders(),
+              }).then((r) => (r.ok ? r.text() : ""));
               if (cif) await pmol.addDict(cif);
             } catch {
               /* non-fatal: bare-atom pose */
@@ -1146,7 +1154,10 @@ export function InspectDrawer({
                 {/* Ligand sketch only for the dataset currently live in Moorhen */}
                 {isLiveGroup && liveLigand && (
                   <Box sx={{ mb: 1, textAlign: "center" }}>
-                    <MolViewer cifUrl={api.artifactUrl(liveLigand)} />
+                    <MolViewer
+                      cifUrl={api.artifactUrl(liveLigand)}
+                      fetchInit={{ headers: api.authHeaders() }}
+                    />
                   </Box>
                 )}
                 {/* One-line legend so the chip encoding is self-explaining. */}

@@ -5,12 +5,17 @@
  * MSAL is never imported, and no token machinery runs, so the loopback no-auth
  * flow is byte-identical.
  *
- * Two token consumers:
+ * Token consumers:
  *  - api.ts attaches `Authorization: Bearer <token>` to every API call (fresh
  *    token per request via acquireToken()).
- *  - Moorhen loads artifact bytes via its OWN internal fetch, where we can't set
- *    a header — so api.artifactUrl() appends `?access_token=<cachedToken()>`,
- *    which the ccp4i2 middleware's extract_token() accepts for downloads.
+ *  - Artifact-byte loads use `Authorization` headers too: Moorhen's
+ *    loadToCootFrom*URL accept a trailing RequestInit, so api.authHeaders()
+ *    rides a header (via cachedAccessToken()). Header — not token-in-URL —
+ *    because an enterprise JWT with many group claims runs ~5 KB and a
+ *    token-in-URL inflates the request line past the ingress cap → HTTP 431.
+ *  - The ONE exception is the report <iframe>: a browsing context sends no
+ *    headers, so api.artifactUrlWithToken() appends `?access_token=`, which the
+ *    ccp4i2 middleware's extract_token() accepts for downloads.
  */
 import type { IPublicClientApplication } from "@azure/msal-browser";
 

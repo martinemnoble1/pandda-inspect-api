@@ -36,7 +36,14 @@ const MapCtor = _Map as unknown as new (
 export interface MoorhenMoleculeLike {
   name: string;
   molNo: number;
-  loadToCootFromURL(url: string, name: string): Promise<unknown>;
+  // options threads through to the internal fetch (header-based auth — see
+  // api.authHeaders / the 431 note). Verified against moorhen 0.23
+  // MoorhenMolecule.loadToCootFromURL(url, molName, options?: RequestInit).
+  loadToCootFromURL(
+    url: string,
+    name: string,
+    options?: RequestInit
+  ): Promise<unknown>;
   addRepresentation(style: string, cid: string): Promise<unknown>;
   delete(): Promise<unknown>;
   addDict(dict: string): Promise<unknown>;
@@ -76,17 +83,23 @@ export interface MoorhenMapLike {
   mapCentre: [number, number, number] | null;
   fetchMapCentre(): Promise<[number, number, number] | null>;
   // PanDDA1 event data is an MTZ (needs FEVENT/PHEVENT column labels).
+  // options threads to the internal fetch (header auth — see api.authHeaders).
   loadToCootFromMtzURL(
     url: string,
     name: string,
-    columns: Record<string, unknown>
+    columns: Record<string, unknown>,
+    options?: RequestInit
   ): Promise<unknown>;
-  // PanDDA2 event maps are CCP4 real-space maps (no column labels). Signature
-  // verified against moorhen 0.23 moorhen.d.ts:2710.
+  // PanDDA2 event maps are CCP4 real-space maps (no column labels). Real 0.23
+  // signature is (url, name, isDiffMap?, decompress?, options?: RequestInit)
+  // (MoorhenMap.loadToCootFromMapURL) — options is the FIFTH arg, so decompress
+  // must be passed (false) to reach it. options threads to the internal fetch.
   loadToCootFromMapURL(
     url: string,
     name: string,
-    isDiffMap?: boolean
+    isDiffMap?: boolean,
+    decompress?: boolean,
+    options?: RequestInit
   ): Promise<unknown>;
   drawMapContour(): Promise<unknown>;
   delete(): Promise<unknown>;
@@ -125,9 +138,12 @@ export async function autoReadMtzFromURL(
   url: string,
   filename: string,
   commandCentreRef: unknown,
-  store: unknown
+  store: unknown,
+  // Forwarded to the bytes fetch so the model MTZ loads header-authenticated
+  // (header — not token-in-URL — auth; see api.authHeaders / the 431 note).
+  options?: RequestInit
 ): Promise<MoorhenMapLike[]> {
-  const resp = await fetch(url);
+  const resp = await fetch(url, options);
   if (!resp.ok) throw new Error(`${resp.status} fetching ${url}`);
   const buf = await resp.arrayBuffer();
   // Name must end in .mtz — autoReadMtz/MtzWrapper key off the extension.

@@ -21,10 +21,14 @@ export function MolViewer({
   cifUrl,
   width = 200,
   height = 150,
+  // Forwarded to the CIF fetch so the bytes load header-authenticated under
+  // AAD (e.g. { headers: api.authHeaders() }); omitted on desktop/no-auth.
+  fetchInit,
 }: {
   cifUrl: string;
   width?: number;
   height?: number;
+  fetchInit?: RequestInit;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
@@ -34,7 +38,7 @@ export function MolViewer({
     setError(false);
     (async () => {
       try {
-        const cif = await fetch(cifUrl).then((r) => r.text());
+        const cif = await fetch(cifUrl, fetchInit).then((r) => r.text());
         if (cancelled || !window.RDKit) return;
         const mol = window.RDKit.get_mol(cif);
         const svg = mol.get_svg(width, height);
@@ -47,6 +51,10 @@ export function MolViewer({
     return () => {
       cancelled = true;
     };
+    // fetchInit is a fresh object each render (inline headers); cifUrl already
+    // keys the fetch and the token is stable across one URL, so re-running on
+    // fetchInit identity would needlessly refetch. Intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cifUrl, width, height]);
 
   if (error)

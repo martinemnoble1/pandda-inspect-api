@@ -56,7 +56,10 @@ export function ProjectDashboard() {
         const checks = await Promise.all(
           all.map(async (r) => {
             try {
-              const resp = await fetch(api.artifactUrl(r), { method: "HEAD" });
+              const resp = await fetch(api.artifactUrl(r), {
+                method: "HEAD",
+                headers: api.authHeaders(),
+              });
               return resp.ok ? r : null;
             } catch {
               return null;
@@ -182,7 +185,9 @@ export function ProjectDashboard() {
               {reports[tab] && (
                 <iframe
                   title={reportName(reports[tab])}
-                  src={api.artifactUrl(reports[tab])}
+                  // An <iframe> sends no request headers, so the report
+                  // load is the one case that carries the bearer in the URL.
+                  src={api.artifactUrlWithToken(reports[tab])}
                   style={{ width: "100%", height: "100%", border: "none" }}
                 />
               )}
