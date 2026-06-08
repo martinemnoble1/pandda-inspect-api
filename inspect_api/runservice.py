@@ -89,21 +89,46 @@ def _default_out_dir(share_path: str, group: str) -> str:
     return str(Path(share_path) / "pandda2_out")
 
 
-# pandda2.analyse overrides a trigger may set. Only these keys reach the
-# command line — an allowlist (not for shell safety: values are argv-quoted,
-# but to stop arbitrary --flags) that is settings-extensible
-# (PANDDA_RUN_ALLOWED_PARAMS) as more pandda2 flags are confirmed. out_dir /
-# data_dirs are deliberately NOT here — they are server-computed (ingest reads
-# out_dir). See docs/RUN_LIFECYCLE.md (invocation contract).
-DEFAULT_ALLOWED_PARAMS = frozenset({
-    "pdb_regex", "mtz_regex", "ligand_cif_regex", "ligand_pdb_regex",
-    "dataset_range", "local_cpus",
+# pandda2.analyse flags Reinspect OWNS — a trigger may NOT override these; every
+# OTHER well-formed pandda2.analyse flag is accepted and passed straight to the
+# command line. Reserved because they'd break the input/output contract (paths
+# the server computes + ingest reads) or the Batch execution model (the
+# JobRunner is the distribution layer; pandda2 runs LOCAL on the node, so its
+# own distributed/processing flags must not be set). Extend per deployment via
+# settings.PANDDA_RUN_RESERVED_PARAMS.
+RESERVED_PARAMS = frozenset({
+    "data_dirs", "out_dir",
+    "local_processing", "global_processing", "job_params_file", "job_extra",
+    "distributed_scheduler", "distributed_queue", "distributed_project",
+    "distributed_num_workers", "distributed_cores_per_worker",
+    "distributed_mem_per_core", "distributed_resource_spec", "distributed_tmp",
+    "distributed_walltime", "distributed_watcher",
+    "distributed_slurm_partition",
 })
 
+# A param key must look like a pandda2 long-flag name (so it can't inject
+# anything when rendered as ``--<key>``).
+_PARAM_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
 
-def allowed_params() -> frozenset:
-    extra = getattr(settings, "PANDDA_RUN_ALLOWED_PARAMS", None)
-    return frozenset(extra) if extra else DEFAULT_ALLOWED_PARAMS
+
+def reserved_params() -> frozenset:
+    extra = getattr(settings, "PANDDA_RUN_RESERVED_PARAMS", None)
+    return RESERVED_PARAMS | frozenset(extra) if extra else RESERVED_PARAMS
+
+
+def _validate_params(params: dict) -> None:
+    reserved = reserved_params()
+    for key in params:
+        if not _PARAM_KEY.match(key):
+            raise RunError(
+                f"invalid run param name {key!r} — expected a pandda2.analyse "
+                "flag, e.g. 'memory_availability'"
+            )
+        if key in reserved:
+            raise RunError(
+                f"run param {key!r} is reserved (Reinspect owns it) and cannot "
+                "be set per run"
+            )
 
 
 def submit_run(
@@ -127,12 +152,7 @@ def submit_run(
         raise RunError("project, group and share_path are required")
 
     params = params or {}
-    bad = set(params) - allowed_params()
-    if bad:
-        raise RunError(
-            f"unknown run params {sorted(bad)}; allowed: "
-            f"{sorted(allowed_params())}"
-        )
+    _validate_params(params)
 
     parent = None
     if retry_of is not None:
