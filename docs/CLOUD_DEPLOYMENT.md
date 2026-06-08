@@ -141,6 +141,39 @@ python manage.py test inspect_api.tests.test_storage_azure
 `azure-storage-blob` SDKs negotiate. The test skips itself cleanly when the env
 vars / SDK aren't present, so the default `manage.py test` run is unaffected.
 
+### Symlinked inputs on a shared filesystem (the `mfsymlinks` gotcha)
+
+PanDDA2's per-dataset **input files are POSIX symlinks** —
+`processed_datasets/<dtag>/<dtag>-pandda-input.{pdb,mtz}` (and the ligand
+dictionary) point into a sibling original-data tree. On **Azure Files / CIFS**
+this bites: a symlink is only honoured as a link when the share is mounted with
+the `mfsymlinks` option; without it, the link is stored as a **1067-byte regular
+file beginning `XSym`** (the minshall+french stub). A reader that lacks the
+option then serves that stub as the "file" — Moorhen reports *"File not
+identified as MTZ"* and the model/MTZ silently fail to load (the event-map
+`.ccp4`, a real file, is unaffected — that's the tell). The cheap diagnostic: a
+~1.1 KB artifact download whose body starts `XSym`.
+
+Defend at **two** layers:
+
+1. **Producer (preferred): dereference at run end.** Mount the share
+   `mfsymlinks` on *every* reader (Batch node **and** the serving container), or
+   have the PanDDA entrypoint dereference symlinks after the run
+   (`find "$out_dir" -type l … cp -L …`) so the inputs become real files.
+2. **Ingest (belt-and-braces, automatic).** `ingest_pandda2` reads the run's
+   **`input.yaml`** — the authoritative manifest of the *real* input paths +
+   typed ligand slots + resolution (see
+   [pandda2_input.py](../inspect_api/pandda2_input.py)). It identifies the apo
+   PDB/MTZ, restraint CIF and `ligand_source` from the manifest (no
+   symlink-following or `ligand_files/` globbing), and where it finds an XSym
+   stub in the tree it **materialises the real bytes in place** from the
+   manifest path — *if the original data is reachable from the ingest host*.
+   When it isn't, ingest prints a loud, actionable warning listing the affected
+   files instead of cataloguing a stub that fails three screens later.
+
+So with `input.yaml` present and the original data co-mounted, ingest is
+self-healing; otherwise fix the mount/entrypoint per (1).
+
 ## 3. Container deployment (Azure Container Apps / Materia host)
 
 The repo ships a [Dockerfile](../Dockerfile): stage 1 builds the React/Moorhen

@@ -12,6 +12,12 @@ PanDDA2 source: zero references to results.json). Instead it emits:
     (``<dtag>-pandda-input.pdb/.mtz``), z-map, one or more event maps
     (``<dtag>-event_N_1-BDC_<x>_map.native.ccp4``), ``events.yaml`` /
     ``processed_dataset.yaml``, ``ligand_files/``.
+  * ``input.yaml`` — the authoritative per-dataset manifest of the REAL input
+    paths (the symlink targets) + typed ligand slots + resolution. When present
+    it is preferred over symlink-following + ``ligand_files/`` globbing for
+    identifying the apo pdb/mtz, the restraint CIF and ``ligand_source`` — and
+    is the source we materialise from when the share mangled the input symlinks
+    into CIFS XSym stubs. See :mod:`inspect_api.pandda2_input`.
 
 The internal Dataset/Event/Artifact/Shell model is unchanged — only the *reader*
 differs. That the contract survives a completely different on-disk format is the
@@ -35,13 +41,16 @@ Observations baked in from a real BAZ2B run (Zenodo 48768, 2026-05-30):
   * ``ligand_files/`` may be empty — absence is not an error.
 """
 import csv
+import shutil
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
 from inspect_api.conventions import detect_map_columns
 from inspect_api.models import Artifact
+from inspect_api.pandda2_input import is_xsym_stub, load_input_yaml
 from inspect_api.reconcile import (
     ArtifactSpec,
     DatasetSpec,
@@ -52,6 +61,16 @@ from inspect_api.reconcile import (
 
 PROCESSED = "processed_datasets"
 ANALYSES = "analyses"
+
+
+@dataclass
+class _InputReport:
+    """What happened to the symlinked input files during this ingest — so the
+    CIFS-symlink-stub failure mode (see pandda2_input) surfaces loudly at
+    ingest, not silently three screens later as 'File not identified as MTZ'."""
+
+    healed: list[str] = field(default_factory=list)  # stub→real, in place
+    stubs: list[str] = field(default_factory=list)  # stub, src unreachable
 
 
 class Command(BaseCommand):
@@ -80,7 +99,8 @@ class Command(BaseCommand):
         if not rows:
             raise CommandError(f"{events_csv} has no event rows.")
 
-        spec = self._build_spec(name, root, rows)
+        report = _InputReport()
+        spec = self._build_spec(name, root, rows, report)
         res = reconcile_project(spec)
 
         n_event_maps = sum(
@@ -100,13 +120,38 @@ class Command(BaseCommand):
                 f"{res.n_built_preserved} built/refined models; "
                 f"flagged {res.n_inputs_changed} as inputs_changed."
             )
+        if report.healed:
+            self.stdout.write(
+                f"  Dereferenced {len(report.healed)} CIFS symlink-stub "
+                f"input file(s) in place (from input.yaml real paths)."
+            )
+        if report.stubs:
+            # Loud + actionable: these would otherwise serve a 1067-byte XSym
+            # stub and fail in the viewer as "File not identified as MTZ".
+            self.stdout.write(self.style.WARNING(
+                f"  {len(report.stubs)} input file(s) are unresolved CIFS "
+                "symlink stubs whose source was not reachable to dereference; "
+                "they will FAIL to serve. Mount the share with 'mfsymlinks' "
+                "on every reader, or run the run-end deref. Affected: "
+                + ", ".join(report.stubs[:10])
+                + (" …" if len(report.stubs) > 10 else "")
+            ))
 
-    def _build_spec(self, name, root, rows) -> ProjectSpec:
+    def _build_spec(self, name, root, rows, report) -> ProjectSpec:
         """Parse the PanDDA2 tree into a normalized ProjectSpec.
 
         No DB writes here — the import boundary's only job is to turn the
         on-disk format into the shared spec; reconcile.py owns persistence.
+
+        EXCEPTION: when the share mangled PanDDA2's input symlinks into CIFS
+        XSym stubs, we materialise the real bytes in place from input.yaml so
+        serving works (see _materialise_inputs). That is a deliberate, idempotent
+        repair of the import tree, not a model write.
         """
+        # input.yaml — the authoritative manifest of real input paths + typed
+        # ligand slots + resolution. Empty {} for older trees ⇒ fall back to
+        # symlink/glob discovery throughout (each helper degrades gracefully).
+        inputs = load_input_yaml(root)
         # --- Datasets: union of every dtag with a processed dir AND every
         # dtag in the event CSV (a dataset can be processed with 0 events, or
         # — defensively — appear in the CSV without a dir). ---
@@ -133,10 +178,17 @@ class Command(BaseCommand):
         datasets = []
         for dtag in all_dtags:
             r0 = first_row.get(dtag, {})
+            di = inputs.get(dtag)
+            # Repair any CIFS-stubbed input symlinks BEFORE cataloguing, so the
+            # in-tree relpaths we record resolve to real bytes at serve time.
+            self._materialise_inputs(processed_dir, dtag, di, report)
             ds_spec = DatasetSpec(
                 dtag=dtag,
                 metrics={
-                    "analysed_resolution": _f(r0.get("analysed_resolution")),
+                    # input.yaml's Resolution is a robust fallback — it also
+                    # covers datasets processed with zero events (no CSV row).
+                    "analysed_resolution": _f(r0.get("analysed_resolution"))
+                    or (di.resolution if di else None),
                     "high_resolution": _f(r0.get("high_resolution")),
                     "low_resolution": _f(r0.get("low_resolution")),
                     "r_free": _f(r0.get("r_free")),
@@ -144,7 +196,7 @@ class Command(BaseCommand):
                     "map_uncertainty": _f(r0.get("map_uncertainty")),
                 },
                 events=self._build_events(root, dtag, rows_by_dtag[dtag]),
-                artifacts=self._dataset_artifacts(processed_dir, dtag),
+                artifacts=self._dataset_artifacts(processed_dir, dtag, di),
                 # Start model = the APO input (ligand-free, what went INTO
                 # pandda2), so every event is a candidate pose merged onto it.
                 # NOT the merged pandda-model.pdb (kept only as a reference).
@@ -156,8 +208,12 @@ class Command(BaseCommand):
                 current_sf_relpath=self._start_sf_relpath(
                     processed_dir, dtag
                 ),
-                ligand_source=self._classify_ligand_source(
-                    processed_dir / dtag, dtag
+                # Prefer the manifest's typed ligand slots (exact, no disk
+                # walk); fall back to glob/symlink classification when absent.
+                ligand_source=(
+                    di.ligand_source if di
+                    else self._classify_ligand_source(processed_dir / dtag,
+                                                       dtag)
                 ),
             )
             datasets.append(ds_spec)
@@ -255,7 +311,40 @@ class Command(BaseCommand):
         return out
 
     @staticmethod
-    def _dataset_artifacts(processed_dir, dtag) -> list:
+    def _materialise_inputs(processed_dir, dtag, di, report) -> None:
+        """Repair CIFS-stubbed input symlinks in place from input.yaml.
+
+        If the in-tree ``-pandda-input.{pdb,mtz}`` is an XSym stub (the share
+        stored the POSIX symlink as a 1067-byte regular file), copy the REAL
+        bytes over it from the manifest's recorded path. Idempotent: a real
+        file is left untouched; a stub whose source isn't reachable is recorded
+        for a loud warning. This is what lets serving work without an mfsymlinks
+        mount or a run-end deref, wherever the original data is co-mounted.
+        """
+        ddir = processed_dir / dtag
+        for fname, src in (
+            (f"{dtag}-pandda-input.pdb", di.pdb if di else None),
+            (f"{dtag}-pandda-input.mtz", di.mtz if di else None),
+        ):
+            in_tree = ddir / fname
+            if not is_xsym_stub(in_tree):
+                continue  # absent, or already a real file — nothing to do
+            rel = f"{PROCESSED}/{dtag}/{fname}"
+            healed = False
+            if src:
+                real = Path(src)
+                try:
+                    if real.is_file() and not is_xsym_stub(real):
+                        shutil.copyfile(real, in_tree)
+                        report.healed.append(rel)
+                        healed = True
+                except OSError:
+                    pass
+            if not healed:
+                report.stubs.append(rel)
+
+    @staticmethod
+    def _dataset_artifacts(processed_dir, dtag, di=None) -> list:
         ddir = processed_dir / dtag
         if not ddir.is_dir():
             return []
@@ -281,12 +370,12 @@ class Command(BaseCommand):
                     )
                 )
         # Ligand restraint dictionary. PanDDA2's ligand_files/ is often empty;
-        # the canonical CIF lives in the ORIGINAL data tree at
-        # data/<dtag>/ligand.cif, reachable by resolving the -pandda-input.pdb
-        # symlink (which points into data/<dtag>/). It's outside source_root,
-        # so we EMBED its bytes, not a path (see Artifact.contents
-        # + docs). Falls back to any ligand_files/*.cif if present.
-        cif = Command._find_ligand_cif(ddir, dtag)
+        # the canonical CIF lives in the ORIGINAL data tree. input.yaml names
+        # its real path directly (no symlink follow); else fall back to
+        # resolving the -pandda-input.pdb symlink to data/<dtag>/ligand.cif,
+        # then ligand_files/*.cif. It's outside source_root, so we EMBED its
+        # bytes, not a path (see Artifact.contents + docs).
+        cif = Command._find_ligand_cif(ddir, dtag, di)
         if cif is not None:
             out.append(
                 ArtifactSpec(
@@ -356,15 +445,18 @@ class Command(BaseCommand):
             return None
 
     @staticmethod
-    def _find_ligand_cif(ddir: Path, dtag: str) -> str | None:
+    def _find_ligand_cif(ddir: Path, dtag: str, di=None) -> str | None:
         """Return the ligand restraint CIF *contents*, or None.
 
-        Looks first in the original data tree (data/<dtag>/ligand.cif), then
-        falls back to any ligand_files/*.cif inside the processed dir. Returns
+        Prefers input.yaml's recorded dict CIF path (exact, no symlink follow);
+        then the original data tree (data/<dtag>/ligand.cif) via the input-pdb
+        symlink; then any ligand_files/*.cif inside the processed dir. Returns
         the file text (embedded in the DB). Tolerates SMILES/pdb-only / missing
         dicts by returning None — those datasets are flagged by the caller.
         """
         candidates = []
+        if di is not None and di.dict_cif:
+            candidates.append(Path(di.dict_cif))
         data_dir = Command._data_dir(ddir, dtag)
         if data_dir is not None:
             candidates.append(data_dir / "ligand.cif")
