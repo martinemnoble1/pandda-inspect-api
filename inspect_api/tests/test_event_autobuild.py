@@ -43,9 +43,15 @@ def _write_tree(root: Path, dtag: str) -> None:
     pose.write_text(
         "HETATM    1  C1  LIG 0   1   1.0 2.0 3.0\n", encoding="utf-8"
     )
+    # Event 1 carries a Position Array (the detection voxels) whose mean is
+    # [11, 21, 31] — deliberately NOWHERE NEAR the CSV x,y,z (1,2,3), the
+    # build-snapped centroid. Event 2 has no voxels (detection_centroid []).
     (proc / "events.yaml").write_text(
         "1:\n"
         "  BDC: 0.3\n"
+        "  Position Array:\n"
+        "  - [10.0, 20.0, 30.0]\n"
+        "  - [12.0, 22.0, 32.0]\n"
         "  Build:\n"
         f"    Build Path: {pose}\n"
         "    Build Score: 0.88\n"
@@ -83,6 +89,22 @@ class EventAutobuildIngestTests(TestCase):
         )
         self.assertEqual(pose.origin, Artifact.Origin.IMPORTED)
         self.assertEqual(pose.event_id, e1.id)
+
+    def test_detection_centroid_is_voxel_mean_not_build_snapped(self):
+        # The detection locus is the mean of the Position Array voxels
+        # ([11,21,31]) — the run-stable match key — NOT the build-snapped
+        # xyz_centroid ([1,2,3] from the CSV). The two MUST differ.
+        e1 = self._ingest().events.get(event_num=1)
+        self.assertEqual(e1.detection_centroid, [11.0, 21.0, 31.0])
+        self.assertEqual(e1.xyz_centroid, [1.0, 2.0, 3.0])
+        self.assertNotEqual(e1.detection_centroid, e1.xyz_centroid)
+
+    def test_detection_centroid_empty_without_voxels(self):
+        # Event 2 has no Position Array (and no Build) — detection_centroid is
+        # [], but xyz_centroid still comes from the CSV row.
+        e2 = self._ingest().events.get(event_num=2)
+        self.assertEqual(e2.detection_centroid, [])
+        self.assertEqual(e2.xyz_centroid, [1.0, 2.0, 3.0])
 
     def test_event_without_build_has_no_pose_or_metrics(self):
         e2 = self._ingest().events.get(event_num=2)

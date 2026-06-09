@@ -159,9 +159,18 @@ class Event(models.Model):
     # The merge action flips it True when it builds the pose into the model.
     # See the apo-start-model note.
     pose_merged = models.BooleanField(null=True, blank=True)
-    # Recentre target for the viewer.
+    # Recentre target for the viewer. NB xyz_centroid is build-SNAPPED: it
+    # comes from the CSV x,y,z / events.yaml top-level Centroid, which equal
+    # the autobuild *Build* centroid and so wander ~20A when a build is bad.
     xyz_centroid = models.JSONField(default=list)
     xyz_peak = models.JSONField(default=list)
+    # The run-stable DETECTION locus: the mean of the event-cluster voxel
+    # coords (events.yaml "Position Array") — where the density blob actually
+    # is, independent of where autobuild placed the ligand. Two runs of the
+    # same crystal agree on this to sub-A, so it (NOT xyz_centroid) is the key
+    # for matching events across runs. Empty list when no voxels (PanDDA1 / no
+    # Build). See docs/MULTI_RUN_DATA_MODEL.md (Phase A).
+    detection_centroid = models.JSONField(default=list)
 
     # --- mutable inspection decision / provenance ---
     decision = models.CharField(
