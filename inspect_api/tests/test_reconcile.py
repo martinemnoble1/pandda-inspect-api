@@ -30,7 +30,8 @@ NAME = "Proj"
 ROOT = "/data/proj"
 
 
-def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8, r_free=0.21):
+def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8, r_free=0.21,
+          centroid=(10.0, 20.0, 30.0)):
     """One-dataset, one-event spec; params let a re-ingest vary inputs.
 
     ``struct_relpath`` is the apo input STRUCTURE, which is also the dataset's
@@ -47,7 +48,12 @@ def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8, r_free=0.21):
                     EventSpec(
                         event_num=1,
                         site_num=1,
-                        metrics={"z_peak": z_peak, "score": score},
+                        metrics={
+                            "z_peak": z_peak,
+                            "score": score,
+                            # A locus so Finding association seeds/links.
+                            "detection_centroid": list(centroid),
+                        },
                         event_map_relpath="ds1-event_1_map.ccp4",
                     )
                 ],
@@ -85,11 +91,14 @@ class ReIngestPreservesHumanStateTests(TestCase):
         self.event = Event.objects.get(dataset__dtag="ds1", event_num=1)
 
     def test_decision_survives_reingest(self):
-        self.event.decision = Event.Decision.HIT
-        self.event.comment = "clear density"
-        self.event.inspected_by = "mn"
-        self.event.inspected_at = timezone.now()
-        self.event.save()
+        # Decision lives on the run-independent Finding now.
+        finding = self.event.finding
+        self.assertIsNotNone(finding)
+        finding.decision = Event.Decision.HIT
+        finding.comment = "clear density"
+        finding.inspected_by = "mn"
+        finding.inspected_at = timezone.now()
+        finding.save()
 
         # Re-ingest with *changed machine metrics*.
         res = reconcile_project(_spec(z_peak=9.9, score=0.95))
@@ -97,7 +106,7 @@ class ReIngestPreservesHumanStateTests(TestCase):
         self.assertFalse(res.created)
         self.assertEqual(res.n_decisions_preserved, 1)
         self.event.refresh_from_db()
-        # Human state untouched...
+        # Human state untouched (read through the event proxy)...
         self.assertEqual(self.event.decision, Event.Decision.HIT)
         self.assertEqual(self.event.comment, "clear density")
         self.assertEqual(self.event.inspected_by, "mn")
@@ -212,6 +221,65 @@ class MultiRunCoexistenceTests(TestCase):
         self.assertEqual(
             RunDataset.objects.get(run=self.run_a, dataset=ds).r_free, 0.25
         )
+
+
+class CrossRunDecisionSharingTests(TestCase):
+    """Phase C headline: a decision made once is shared across runs. Two runs
+    that detected the SAME site (close detection centroids) link to ONE
+    Finding; a run that detected a DIFFERENT location seeds its own."""
+
+    def setUp(self):
+        self.project = Project.objects.create(name=NAME, source_root=ROOT)
+        self.run_a = Run.objects.create(
+            project=self.project, group="A", share_path=ROOT,
+            idempotency_key="k-a", status=Run.Status.SUCCEEDED,
+        )
+        self.run_b = Run.objects.create(
+            project=self.project, group="B", share_path=ROOT,
+            idempotency_key="k-b", status=Run.Status.SUCCEEDED,
+        )
+        # Both runs detect the same blob (centroids 0.3 A apart < 1.5 A tol).
+        reconcile_project(_spec(centroid=(10.0, 20.0, 30.0)), run=self.run_a)
+        reconcile_project(_spec(centroid=(10.2, 20.1, 30.1)), run=self.run_b)
+        self.ds = Dataset.objects.get(dtag="ds1")
+
+    def _ev(self, run):
+        return self.ds.events.get(run_dataset__run=run)
+
+    def test_both_runs_link_to_one_finding(self):
+        self.assertEqual(self.ds.findings.count(), 1)
+        self.assertEqual(self._ev(self.run_a).finding_id,
+                         self._ev(self.run_b).finding_id)
+
+    def test_decision_on_one_run_is_seen_by_the_other(self):
+        f = self._ev(self.run_a).finding
+        f.decision = Event.Decision.HIT
+        f.comment = "ligand clear"
+        f.save()
+        # Run B's event reads the shared verdict through the proxy.
+        self.assertEqual(self._ev(self.run_b).decision, Event.Decision.HIT)
+        self.assertEqual(self._ev(self.run_b).comment, "ligand clear")
+
+    def test_decision_preserved_count_on_shared_finding(self):
+        f = self._ev(self.run_a).finding
+        f.decision = Event.Decision.HIT
+        f.save()
+        # Re-ingest run A: its event re-links to the decided Finding.
+        res = reconcile_project(
+            _spec(centroid=(10.0, 20.0, 30.0)), run=self.run_a
+        )
+        self.assertEqual(res.n_decisions_preserved, 1)
+
+    def test_disagreeing_detection_seeds_separate_finding(self):
+        # A third run detects a blob 20 A away — a different site, not shared.
+        run_c = Run.objects.create(
+            project=self.project, group="C", share_path=ROOT,
+            idempotency_key="k-c", status=Run.Status.SUCCEEDED,
+        )
+        reconcile_project(_spec(centroid=(30.0, 20.0, 30.0)), run=run_c)
+        self.assertEqual(self.ds.findings.count(), 2)
+        self.assertNotEqual(self._ev(self.run_a).finding_id,
+                            self._ev(run_c).finding_id)
 
 
 class StartModelPointerTests(TestCase):

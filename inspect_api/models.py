@@ -201,24 +201,20 @@ class Event(models.Model):
     # Build). See docs/MULTI_RUN_DATA_MODEL.md (Phase A).
     detection_centroid = models.JSONField(default=list)
 
-    # --- mutable inspection decision / provenance ---
-    decision = models.CharField(
-        max_length=16,
-        choices=Decision.choices,
-        default=Decision.UNREVIEWED,
+    # --- the human conclusion ---
+    # The inspection decision moved to Finding (run-independent, see
+    # MULTI_RUN_DATA_MODEL.md Phase C): a curator judges a binding SITE on the
+    # crystal once, and every run's Event that detected that site shares the
+    # verdict. ``finding`` is set by spatial association at ingest (eager
+    # seeding); the API still surfaces decision/confidence/... on the event by
+    # proxying to this link. Null only for an event with no usable locus.
+    finding = models.ForeignKey(
+        "Finding",
+        on_delete=models.SET_NULL,
+        related_name="events",
+        null=True,
+        blank=True,
     )
-    confidence = models.CharField(max_length=32, blank=True, default="")
-    comment = models.TextField(blank=True, default="")
-    inspected_by = models.CharField(max_length=255, blank=True, default="")
-    # The authenticated curator's Azure AD object id (``oid`` claim, falling
-    # back to ``sub``), stamped server-side when cloud auth is on. Nullable and
-    # a no-op for the no-auth desktop flow and for all pre-auth rows, whose
-    # ``inspected_by`` stays a free-text string with a null oid here (matches
-    # the §12 reconciliation recommendation: bind NEW decisions to AAD
-    # identities without rewriting historical ones). See identity stamping in
-    # views.EventViewSet and docs/MATERIA_INTEGRATION.md R3.
-    inspected_by_oid = models.CharField(max_length=255, null=True, blank=True)
-    inspected_at = models.DateTimeField(null=True, blank=True)
 
     # The best model for THIS event's density — a ligand built into the local
     # density (you build per-event, but refine per-crystal; cf.
@@ -249,6 +245,76 @@ class Event(models.Model):
 
     def __str__(self):
         return f"{self.dataset.dtag}:event-{self.event_num}"
+
+    # Read-through proxies to the linked Finding, so `event.decision` etc. still
+    # resolve for callers and the single-event API. WRITES go through the
+    # Finding directly (serializer/view), never these — they are read-only. ORM
+    # filters must use `finding__<field>`, not these (a property is not a
+    # column).
+    @property
+    def decision(self):
+        return self.finding.decision if self.finding_id else (
+            Event.Decision.UNREVIEWED
+        )
+
+    @property
+    def confidence(self):
+        return self.finding.confidence if self.finding_id else ""
+
+    @property
+    def comment(self):
+        return self.finding.comment if self.finding_id else ""
+
+    @property
+    def inspected_by(self):
+        return self.finding.inspected_by if self.finding_id else ""
+
+    @property
+    def inspected_by_oid(self):
+        return self.finding.inspected_by_oid if self.finding_id else None
+
+    @property
+    def inspected_at(self):
+        return self.finding.inspected_at if self.finding_id else None
+
+
+class Finding(models.Model):
+    """The run-INDEPENDENT human conclusion about a binding site on a crystal.
+
+    A curator judges a SITE, not a particular run's detection of it. The Finding
+    is anchored in space (``centroid``, the detection locus) so Events from
+    different runs that found the same blob link to ONE Finding and share its
+    decision. Created by spatial association at ingest (eager seeding); ingest
+    NEVER mutates an existing Finding's human state. The decision/review fields
+    moved here off Event. See docs/MULTI_RUN_DATA_MODEL.md (Phase C)."""
+
+    dataset = models.ForeignKey(
+        Dataset, on_delete=models.CASCADE, related_name="findings"
+    )
+    # Representative detection locus (a run's detection_centroid), in the
+    # crystal's native frame — the anchor events are matched against.
+    centroid = models.JSONField(default=list)
+
+    # --- mutable inspection decision / provenance (moved off Event) ---
+    decision = models.CharField(
+        max_length=16,
+        choices=Event.Decision.choices,
+        default=Event.Decision.UNREVIEWED,
+    )
+    confidence = models.CharField(max_length=32, blank=True, default="")
+    comment = models.TextField(blank=True, default="")
+    inspected_by = models.CharField(max_length=255, blank=True, default="")
+    # Authenticated curator's Azure AD object id, stamped server-side when cloud
+    # auth is on; null + no-op for the no-auth desktop flow (see views identity
+    # stamping and docs/MATERIA_INTEGRATION.md R3).
+    inspected_by_oid = models.CharField(max_length=255, null=True, blank=True)
+    inspected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["dataset__dtag", "id"]
+
+    def __str__(self):
+        return f"{self.dataset.dtag}:finding-{self.id}:{self.decision}"
 
 
 class Artifact(models.Model):

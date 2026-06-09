@@ -27,6 +27,7 @@ A first ingest of a never-seen project is just the degenerate case: nothing to
 preserve, everything created.
 """
 import hashlib
+import math
 from dataclasses import dataclass, field
 
 from django.db import transaction
@@ -35,6 +36,7 @@ from .models import (
     Artifact,
     Dataset,
     Event,
+    Finding,
     Project,
     Run,
     RunDataset,
@@ -45,6 +47,12 @@ from .models import (
 # bytes" — what a built/refined model derives from. A change here is what
 # raises inputs_changed under a human/job artifact.
 INPUT_KINDS = (Artifact.Kind.STRUCTURE, Artifact.Kind.DATA_MTZ)
+
+# How close (A, native frame) an event's detection locus must be to a Finding's
+# centroid to be the SAME binding site. Empirically two runs' detection
+# centroids agree to <1A while genuine disagreements jump to >16A, so 1.5A
+# separates them with wide margin (docs/MULTI_RUN_DATA_MODEL.md).
+MATCH_TOLERANCE_A = 1.5
 
 
 @dataclass
@@ -154,6 +162,9 @@ def reconcile_project(spec: ProjectSpec, run: Run = None) -> ReconcileResult:
         # This run's metrics on the (run, crystal) row; events hang off it.
         run_dataset = _upsert_run_dataset(run, ds, ds_spec)
         _reconcile_events(run_dataset, ds_spec, res)
+        # Link this run's events to the crystal's run-independent Findings
+        # (sharing decisions across runs); seed new ones for unmatched sites.
+        _associate_findings(run_dataset, res)
         ds_inputs_after = _replace_imported_dataset_artifacts(
             project, ds, ds_spec
         )
@@ -252,15 +263,16 @@ def _imported_input_relpaths(dataset) -> set[str]:
 
 
 def _reconcile_events(run_dataset, ds_spec, res):
-    """Upsert events by (run_dataset, event_num); metrics move, decisions stay.
+    """Upsert events by (run_dataset, event_num); machine metrics move.
 
-    The key is now run-scoped, so re-ingesting the SAME run upserts the same
-    event rows (decisions preserved) while a DIFFERENT run's events land under
-    its own run_dataset and never collide. event.dataset is set in lockstep as
-    the run-independent crystal pointer."""
+    The key is run-scoped, so re-ingesting the SAME run upserts the same event
+    rows while a DIFFERENT run's events land under its own run_dataset and never
+    collide. event.dataset is set in lockstep as the run-independent crystal
+    pointer. Human decision state lives on Finding now and is linked separately
+    (_associate_findings), so there is nothing human to protect here."""
     dataset = run_dataset.dataset
     for ev_spec in ds_spec.events:
-        event, created = Event.objects.get_or_create(
+        event, _ = Event.objects.get_or_create(
             run_dataset=run_dataset,
             event_num=ev_spec.event_num,
             defaults={"dataset": dataset},
@@ -270,10 +282,6 @@ def _reconcile_events(run_dataset, ds_spec, res):
         event.site_num = ev_spec.site_num
         for k, v in ev_spec.metrics.items():
             setattr(event, k, v)
-        # Human decision state (decision/confidence/comment/inspected_by/at)
-        # is deliberately NOT assigned here — it survives the re-ingest.
-        if not created and event.decision != Event.Decision.UNREVIEWED:
-            res.n_decisions_preserved += 1
         event.save()
         res.n_events += 1
 
@@ -302,6 +310,57 @@ def _reconcile_events(run_dataset, ds_spec, res):
                 relpath=ev_spec.ligand_pose_relpath,
                 origin=Artifact.Origin.IMPORTED,
             )
+
+
+# --- findings (run-independent decision anchors) --------------------------
+
+
+def _event_locus(event):
+    """The event's detection locus for matching — the run-stable
+    detection_centroid, falling back to the build-snapped xyz_centroid. None
+    when neither is a usable 3-vector (no coordinate to anchor on)."""
+    for c in (event.detection_centroid, event.xyz_centroid):
+        if isinstance(c, list) and len(c) == 3:
+            return c
+    return None
+
+
+def _nearest_finding(dataset, locus):
+    """The dataset's Finding whose centroid is closest to ``locus`` within
+    MATCH_TOLERANCE_A, or None. Greedy nearest — the empirical >16A gap between
+    same-site and different-site makes ties a non-issue (ADR open Q3)."""
+    best, best_d = None, MATCH_TOLERANCE_A
+    for f in dataset.findings.all():
+        if isinstance(f.centroid, list) and len(f.centroid) == 3:
+            d = math.dist(locus, f.centroid)
+            if d <= best_d:
+                best, best_d = f, d
+    return best
+
+
+def _associate_findings(run_dataset, res):
+    """Link each of this run's events to the crystal's run-independent Finding
+    for its binding site; seed a new (unreviewed) Finding when none is near.
+
+    This is the cross-run sharing: a second run's event near an existing
+    Finding inherits the curator's decision instead of starting blank. Findings
+    are NEVER mutated here — only created/linked — so human state is structurally
+    out of the import path."""
+    dataset = run_dataset.dataset
+    for event in run_dataset.events.all():
+        locus = _event_locus(event)
+        if locus is None:
+            continue  # no anchor — leave unlinked (rare: no voxels, no xyz)
+        finding = _nearest_finding(dataset, locus)
+        if finding is None:
+            finding = Finding.objects.create(
+                dataset=dataset, centroid=list(locus)
+            )
+        elif finding.decision != Event.Decision.UNREVIEWED:
+            res.n_decisions_preserved += 1
+        if event.finding_id != finding.id:
+            event.finding = finding
+            event.save(update_fields=["finding"])
 
 
 # --- artifacts ------------------------------------------------------------

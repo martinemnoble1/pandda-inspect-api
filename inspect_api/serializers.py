@@ -2,7 +2,16 @@ from django.conf import settings
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Artifact, Dataset, Event, Job, Project, Run, Shell
+from .models import (
+    Artifact,
+    Dataset,
+    Event,
+    Finding,
+    Job,
+    Project,
+    Run,
+    Shell,
+)
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
@@ -46,6 +55,50 @@ class EventSerializer(serializers.ModelSerializer):
     # refinement) — the client computes 2mFo-DFc + mFo-DFc maps from it to
     # judge the current model. Null ⇒ no map MTZ. See the map-of-record note.
     current_sf = serializers.SerializerMethodField()
+    # Decision/review state lives on the run-independent Finding now; surface it
+    # on the event for the unchanged single-event API. Reads resolve through the
+    # Event proxy properties; writes route to event.finding (see update()).
+    decision = serializers.ChoiceField(
+        choices=Event.Decision.choices, required=False
+    )
+    confidence = serializers.CharField(
+        max_length=32, required=False, allow_blank=True
+    )
+    comment = serializers.CharField(required=False, allow_blank=True)
+    inspected_by = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    inspected_by_oid = serializers.CharField(read_only=True, allow_null=True)
+    inspected_at = serializers.DateTimeField(read_only=True, allow_null=True)
+
+    def update(self, instance, validated_data):
+        # The writable decision fields belong to the Finding, not the Event.
+        finding_fields = {
+            k: validated_data.pop(k)
+            for k in (
+                "decision", "confidence", "comment", "inspected_by",
+                "inspected_by_oid", "inspected_at",
+            )
+            if k in validated_data
+        }
+        if finding_fields:
+            finding = instance.finding
+            if finding is None:
+                # No Finding linked (event had no usable locus at ingest) —
+                # mint one on first decision so the verdict has a home.
+                finding = Finding.objects.create(
+                    dataset=instance.dataset,
+                    centroid=(
+                        instance.detection_centroid
+                        or instance.xyz_centroid or []
+                    ),
+                )
+                instance.finding = finding
+                instance.save(update_fields=["finding"])
+            for k, v in finding_fields.items():
+                setattr(finding, k, v)
+            finding.save()
+        return super().update(instance, validated_data)
 
     @extend_schema_field(ArtifactSerializer(many=True))
     def get_artifacts(self, obj):
@@ -120,11 +173,10 @@ class EventSerializer(serializers.ModelSerializer):
             "pose_merged",
             "xyz_centroid",
             "xyz_peak",
-            "inspected_at",
-            # Server-stamped from the authenticated AAD identity; never accepted
-            # from the client (the string ``inspected_by`` stays client-settable
-            # for the no-auth desktop flow).
-            "inspected_by_oid",
+            # NB inspected_at / inspected_by_oid are declared explicitly above
+            # with read_only=True (server-stamped from the AAD identity, never
+            # client-accepted), so they are NOT listed here — DRF forbids a
+            # field being both explicitly declared and in read_only_fields.
         ]
 
 
@@ -211,15 +263,17 @@ class ProjectSerializer(serializers.ModelSerializer):
         n_datasets = obj.datasets.count()
         events = Event.objects.filter(dataset__project=obj)
         n_events = events.count()
-        n_hits = events.filter(decision=Event.Decision.HIT).count()
+        # Decision lives on the linked Finding now (finding__decision); an
+        # event with no Finding is unreviewed by definition.
+        n_hits = events.filter(finding__decision=Event.Decision.HIT).count()
         n_no_hit = events.filter(
-            decision=Event.Decision.NO_HIT
+            finding__decision=Event.Decision.NO_HIT
         ).count()
         n_ambiguous = events.filter(
-            decision=Event.Decision.AMBIGUOUS
+            finding__decision=Event.Decision.AMBIGUOUS
         ).count()
-        n_reviewed = events.exclude(
-            decision=Event.Decision.UNREVIEWED
+        n_reviewed = events.filter(finding__isnull=False).exclude(
+            finding__decision=Event.Decision.UNREVIEWED
         ).count()
         n_sites = (
             events.exclude(site_num__isnull=True)
@@ -282,7 +336,9 @@ class ProjectSerializer(serializers.ModelSerializer):
             site_rows.append({
                 "site_num": s,
                 "n_events": se.count(),
-                "n_hits": se.filter(decision=Event.Decision.HIT).count(),
+                "n_hits": se.filter(
+                    finding__decision=Event.Decision.HIT
+                ).count(),
             })
         return {
             "analysed": n_events > 0,
