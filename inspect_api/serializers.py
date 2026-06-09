@@ -55,6 +55,24 @@ class EventSerializer(serializers.ModelSerializer):
     # refinement) — the client computes 2mFo-DFc + mFo-DFc maps from it to
     # judge the current model. Null ⇒ no map MTZ. See the map-of-record note.
     current_sf = serializers.SerializerMethodField()
+    # Multi-run context (Phase E): which run produced this observation, and
+    # which run-independent Finding (binding site) it belongs to. The compare
+    # view groups events by `finding` and labels each by `run_group`. All
+    # read-only — set at ingest by run-scoping + spatial association.
+    run_id = serializers.SerializerMethodField()
+    run_group = serializers.SerializerMethodField()
+    finding = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
+    def get_run_id(self, obj):
+        rd = obj.run_dataset
+        return rd.run_id if rd else None
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_run_group(self, obj):
+        rd = obj.run_dataset
+        return rd.run.group if rd else None
+
     # Decision/review state lives on the run-independent Finding now; surface it
     # on the event for the unchanged single-event API. Reads resolve through the
     # Event proxy properties; writes route to event.finding (see update()).
@@ -130,6 +148,9 @@ class EventSerializer(serializers.ModelSerializer):
             "id",
             "dataset",
             "dtag",
+            "run_id",
+            "run_group",
+            "finding",
             "event_num",
             "site_num",
             "event_fraction",
