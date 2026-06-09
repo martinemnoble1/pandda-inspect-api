@@ -10,7 +10,14 @@ flags (does not resolve) input drift under a human/job artifact.
 from django.test import TestCase
 from django.utils import timezone
 
-from inspect_api.models import Artifact, Dataset, Event, Project
+from inspect_api.models import (
+    Artifact,
+    Dataset,
+    Event,
+    Project,
+    Run,
+    RunDataset,
+)
 from inspect_api.reconcile import (
     ArtifactSpec,
     DatasetSpec,
@@ -23,7 +30,7 @@ NAME = "Proj"
 ROOT = "/data/proj"
 
 
-def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8):
+def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8, r_free=0.21):
     """One-dataset, one-event spec; params let a re-ingest vary inputs.
 
     ``struct_relpath`` is the apo input STRUCTURE, which is also the dataset's
@@ -35,7 +42,7 @@ def _spec(struct_relpath="ds1-input.pdb", z_peak=5.0, score=0.8):
         datasets=[
             DatasetSpec(
                 dtag="ds1",
-                metrics={"r_free": 0.21},
+                metrics={"r_free": r_free},
                 events=[
                     EventSpec(
                         event_num=1,
@@ -151,6 +158,60 @@ class ReIngestPreservesBuiltModelTests(TestCase):
 
 
 APO = "ds1-input.pdb"  # _spec's default struct_relpath = the apo start model
+
+
+class MultiRunCoexistenceTests(TestCase):
+    """Two runs of the SAME crystal coexist (Phase B): distinct RunDatasets +
+    Event rows, metrics never clobber, the crystal anchor is shared, and a
+    re-ingest of one run stays idempotent."""
+
+    def setUp(self):
+        self.project = Project.objects.create(name=NAME, source_root=ROOT)
+        self.run_a = Run.objects.create(
+            project=self.project, group="A", share_path=ROOT,
+            idempotency_key="k-a", status=Run.Status.SUCCEEDED,
+        )
+        self.run_b = Run.objects.create(
+            project=self.project, group="B", share_path=ROOT,
+            idempotency_key="k-b", status=Run.Status.SUCCEEDED,
+        )
+        reconcile_project(_spec(z_peak=5.0, r_free=0.21), run=self.run_a)
+        reconcile_project(_spec(z_peak=9.0, r_free=0.30), run=self.run_b)
+
+    def test_one_crystal_two_run_datasets_two_events(self):
+        self.assertEqual(Dataset.objects.filter(dtag="ds1").count(), 1)
+        ds = Dataset.objects.get(dtag="ds1")
+        self.assertEqual(ds.run_datasets.count(), 2)
+        # event_num=1 exists once PER run — no collision on the old key.
+        self.assertEqual(ds.events.filter(event_num=1).count(), 2)
+
+    def test_metrics_do_not_clobber(self):
+        ds = Dataset.objects.get(dtag="ds1")
+        rd_a = ds.run_datasets.get(run=self.run_a)
+        rd_b = ds.run_datasets.get(run=self.run_b)
+        self.assertAlmostEqual(rd_a.r_free, 0.21)
+        self.assertAlmostEqual(rd_b.r_free, 0.30)
+        # Each run's event keeps its own machine metric.
+        self.assertEqual(
+            rd_a.events.get(event_num=1).z_peak, 5.0
+        )
+        self.assertEqual(
+            rd_b.events.get(event_num=1).z_peak, 9.0
+        )
+
+    def test_primary_run_dataset_is_latest_run(self):
+        ds = Dataset.objects.get(dtag="ds1")
+        self.assertEqual(ds.primary_run_dataset.run_id, self.run_b.id)
+
+    def test_reingest_same_run_is_idempotent(self):
+        reconcile_project(_spec(z_peak=7.0, r_free=0.25), run=self.run_a)
+        ds = Dataset.objects.get(dtag="ds1")
+        # Still two run_datasets / two events — run A upserted in place.
+        self.assertEqual(ds.run_datasets.count(), 2)
+        self.assertEqual(ds.events.filter(event_num=1).count(), 2)
+        self.assertEqual(
+            RunDataset.objects.get(run=self.run_a, dataset=ds).r_free, 0.25
+        )
 
 
 class StartModelPointerTests(TestCase):

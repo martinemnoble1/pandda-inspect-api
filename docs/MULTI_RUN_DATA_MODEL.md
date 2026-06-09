@@ -1,8 +1,20 @@
 # ADR: Multi-run data model — Crystal / RunDataset / Observation / Finding
 
-- **Status:** Proposed. Empirical basis validated against two real BAZ2B runs
-  (below); no code written yet.
+- **Status:** **Phase A + B shipped** (the rest Proposed). Phase A:
+  `Event.detection_centroid` (#32). Phase B: `RunDataset`, `Event.run_dataset`,
+  metrics moved off `Dataset`, reconcile run-scoped. Empirical basis validated
+  against two real BAZ2B runs (below).
 - **Date:** 2026-06-09.
+- **Phase B refinements (vs the original sketch below):** (1) `current_sf`
+  STAYS on `Dataset` (crystal grain) — it is the map analogue of the
+  crystal-grain `current_model`, so by parity it is not run-scoped; only the six
+  pure analysis metrics moved to `RunDataset`. (2) `Event.dataset` is KEPT as a
+  denormalised crystal pointer alongside the authoritative `Event.run_dataset`,
+  so the many `event.dataset` / `dataset.events` callers are unaffected. (3) The
+  single-run API is bridged via `Dataset.primary_run_dataset` (the latest run's
+  analysis) until the Phase E compare UI lands — no client change in Phase B.
+  (4) Standalone/CLI ingest synthesises a deterministic `Run` keyed on
+  `(project, source_root)` so re-ingest stays idempotent.
 - **Relates to:** [RUN_LIFECYCLE.md](RUN_LIFECYCLE.md) (the `Run` model this
   builds on), [DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) §1.3
   (the re-ingest "surface, don't resolve" policy this reshapes), and
@@ -224,17 +236,21 @@ must meet so every RunDataset has a Run).
   change yet; this just makes the future match key available and corrects "where
   is the event".*
 
-**Phase B — run-scope the analysis grain.**
-- Migration: add `RunDataset`; add `Artifact.run_dataset` (null); add
-  `Event.run_dataset` (null at first).
-- Data migration: legacy `Dataset`/`Event` rows have no `Run`. Synthesize one
-  **`Run(status=succeeded, group="legacy-import", params={"legacy": true})`**
-  per `Project` (or per ingest source), create a `RunDataset` per `Dataset`
-  under it, copy the metric fields across, and point every `Event.run_dataset`
-  at it.
-- Migration: make `Event.run_dataset` non-null; swap the unique constraint
-  `(dataset, event_num)` → `(run_dataset, event_num)`; remove the moved metric
-  fields from `Dataset`.
+**Phase B — run-scope the analysis grain. ✅ SHIPPED.**
+- DONE differently from the sketch: by decision we **blatted all historical
+  analysis data** (migration `0017` wipes Artifact/Job/Event/Shell/Dataset/Run,
+  keeps Projects) rather than synthesise a legacy `Run` and backfill. Much
+  simpler, no migration-safety logic.
+- `RunDataset(run, dataset)` carries the six metrics. `Event.run_dataset` added
+  (nullable in schema; always set by ingest), unique key swapped to
+  `(run_dataset, event_num)`. `Event.dataset` kept as denormalised crystal
+  pointer. `current_sf` did NOT move (stayed crystal-grain — see refinement #1).
+- `Artifact.run_dataset` was NOT needed in Phase B (apo inputs stay
+  dataset-scoped; revisit only if per-run input artifacts must diverge).
+- Reconcile is the single choke point: it accepts a `run` (synthesised
+  deterministically for standalone ingest), upserts the `RunDataset`, and keys
+  events on `(run_dataset, event_num)`. PanDDA1's reader was untouched — it
+  flows through the same reconcile and gets a synthetic run for free.
 
 **Phase C — Finding (human anchor).**
 - Migration: add `Finding`; add `Event.finding` (null).

@@ -131,6 +131,43 @@ class EventSerializer(serializers.ModelSerializer):
 class DatasetSerializer(serializers.ModelSerializer):
     events = EventSerializer(many=True, read_only=True)
     artifacts = ArtifactSerializer(many=True, read_only=True)
+    # The analysis metrics now live on RunDataset (per-run). Until the multi-run
+    # compare UI lands (Phase E), the single-run API surfaces the representative
+    # run's metrics so the shape is unchanged. See MULTI_RUN_DATA_MODEL.md.
+    analysed_resolution = serializers.SerializerMethodField()
+    high_resolution = serializers.SerializerMethodField()
+    low_resolution = serializers.SerializerMethodField()
+    r_free = serializers.SerializerMethodField()
+    r_work = serializers.SerializerMethodField()
+    map_uncertainty = serializers.SerializerMethodField()
+
+    def _metric(self, obj, field):
+        rd = obj.primary_run_dataset
+        return getattr(rd, field) if rd else None
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_analysed_resolution(self, obj):
+        return self._metric(obj, "analysed_resolution")
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_high_resolution(self, obj):
+        return self._metric(obj, "high_resolution")
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_low_resolution(self, obj):
+        return self._metric(obj, "low_resolution")
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_r_free(self, obj):
+        return self._metric(obj, "r_free")
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_r_work(self, obj):
+        return self._metric(obj, "r_work")
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_map_uncertainty(self, obj):
+        return self._metric(obj, "map_uncertainty")
 
     class Meta:
         model = Dataset
@@ -210,6 +247,20 @@ class ProjectSerializer(serializers.ModelSerializer):
                 v for v in qs.values_list(fld, flat=True) if v is not None
             ]
 
+        # Dataset-level metrics moved to RunDataset; take one value per crystal
+        # from its representative (primary) run so the histogram stays
+        # one-point-per-dataset rather than one-per-run.
+        primary_rds = [
+            rd for rd in (d.primary_run_dataset for d in obj.datasets.all())
+            if rd is not None
+        ]
+
+        def _rd_vals(fld):
+            return [
+                getattr(rd, fld) for rd in primary_rds
+                if getattr(rd, fld) is not None
+            ]
+
         # Event fraction = bound-state fraction = 1 − BDC. (PanDDA2 has no
         # event_fraction column; bdc is its analogue. Clamp to [0,1].)
         event_fractions = [
@@ -218,8 +269,8 @@ class ProjectSerializer(serializers.ModelSerializer):
         distributions = {
             "event_fraction": event_fractions,
             "event_resolution": _vals(events, "map_resolution"),
-            "dataset_resolution": _vals(obj.datasets, "analysed_resolution"),
-            "r_free": _vals(obj.datasets, "r_free"),
+            "dataset_resolution": _rd_vals("analysed_resolution"),
+            "r_free": _rd_vals("r_free"),
         }
         # Per-site rollup (events per site + hits) — backs a small site table.
         site_rows = []
