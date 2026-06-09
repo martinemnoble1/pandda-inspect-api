@@ -29,10 +29,13 @@ PanDDA output formats into the *same* relational model:
 PanDDA2 ingest facts that bit us (all real, from a BAZ2B run):
 - Event identity = `(dtag, event_idx)`. Dataset-level metrics (resolution,
   R-factors, map uncertainty) live on **every event row**, not a separate record
-  — lift them onto the Dataset at ingest.
+  — lift them onto the **`RunDataset`** at ingest (they are per-run, not a
+  crystal property — multi-run, Phase B; they used to sit on `Dataset`).
 - `hit_in_site_probability` = PanDDA2's ML score → our `Event.score`;
   `interesting` = PanDDA2's own boolean → `Event.interesting`. Both are the
-  *machine's* opinion, kept DISTINCT from the mutable human `Event.decision`.
+  *machine's* opinion, kept DISTINCT from the mutable human decision — which now
+  lives on **`Finding`** (run-independent, shared across runs of a site via
+  spatial association; `event.decision` is a read-through proxy). Phase C.
 - `pandda_analyse_sites.csv` centroids are often `(0,0,0)` — **derive site
   centroids from member-event coords**, don't trust the CSV column.
 - A processed dataset can have **zero events** (no `events.yaml`); the reader

@@ -15,7 +15,16 @@ from .identity import identity_from_request
 from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
 from .jobservice import JobError, refresh_job, submit_refinement
-from .models import Artifact, Dataset, Event, Job, Project, Run, Shell
+from .models import (
+    Artifact,
+    Dataset,
+    Event,
+    Finding,
+    Job,
+    Project,
+    Run,
+    Shell,
+)
 from .runservice import RunError, refresh_run, submit_run
 from .storage import get_store
 from .serializers import (
@@ -214,7 +223,7 @@ class EventViewSet(
             qs = qs.filter(dataset__project__name=project)
         hits_only = self.request.query_params.get("hits_only")
         if hits_only in ("1", "true", "True"):
-            qs = qs.exclude(decision=Event.Decision.NO_HIT)
+            qs = qs.exclude(finding__decision=Event.Decision.NO_HIT)
         return qs
 
     def perform_update(self, serializer):
@@ -270,16 +279,28 @@ class EventViewSet(
             land_built_model(event, pdb, pose_merged=is_merge)
         except BuildError as exc:
             return Response({"detail": str(exc)}, status=400)
-        # A ligand merge IS a hit assertion — stamp it (generic saves don't).
-        if is_merge and event.decision == Event.Decision.UNREVIEWED:
-            event.decision = Event.Decision.HIT
-            event.inspected_at = timezone.now()
-            fields = ["decision", "inspected_at"]
-            ident = identity_from_request(request)
-            if ident is not None:
-                event.inspected_by, event.inspected_by_oid = ident
-                fields += ["inspected_by", "inspected_by_oid"]
-            event.save(update_fields=fields)
+        # A ligand merge IS a hit assertion — stamp it on the event's Finding
+        # (the run-independent decision home), minting one if absent.
+        if is_merge:
+            finding = event.finding
+            if finding is None:
+                finding = Finding.objects.create(
+                    dataset=event.dataset,
+                    centroid=(
+                        event.detection_centroid or event.xyz_centroid or []
+                    ),
+                )
+                event.finding = finding
+                event.save(update_fields=["finding"])
+            if finding.decision == Event.Decision.UNREVIEWED:
+                finding.decision = Event.Decision.HIT
+                finding.inspected_at = timezone.now()
+                fields = ["decision", "inspected_at"]
+                ident = identity_from_request(request)
+                if ident is not None:
+                    finding.inspected_by, finding.inspected_by_oid = ident
+                    fields += ["inspected_by", "inspected_by_oid"]
+                finding.save(update_fields=fields)
         event.refresh_from_db()
         return Response(self.get_serializer(event).data)
 

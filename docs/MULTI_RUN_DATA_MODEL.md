@@ -1,9 +1,20 @@
 # ADR: Multi-run data model — Crystal / RunDataset / Observation / Finding
 
-- **Status:** **Phase A + B shipped** (the rest Proposed). Phase A:
-  `Event.detection_centroid` (#32). Phase B: `RunDataset`, `Event.run_dataset`,
-  metrics moved off `Dataset`, reconcile run-scoped. Empirical basis validated
-  against two real BAZ2B runs (below).
+- **Status:** **Phase A + B + C shipped** (the rest Proposed). Phase A:
+  `Event.detection_centroid` (#32). Phase B (#33): `RunDataset`,
+  `Event.run_dataset`, metrics moved off `Dataset`, reconcile run-scoped.
+  Phase C: `Finding` (run-independent decision anchor) + spatial association.
+  Empirical basis validated against two real BAZ2B runs (below).
+- **Phase C scope (decision-only, by decision):** only the decision/review
+  state (`decision`, `confidence`, `comment`, `inspected_*`) moved to `Finding`.
+  `Event.current_model` / `pose_merged` (the built-ligand pointer) stayed on
+  `Event` — they are entangled with buildservice/jobservice and less central;
+  defer to a later phase. `Event` keeps read-through proxy properties
+  (`event.decision` etc. → `event.finding`), and the API write path (PATCH +
+  `commit_model`) routes to `event.finding`, so the contract/client are
+  unchanged. Association keys on `detection_centroid` (fallback `xyz_centroid`)
+  at `MATCH_TOLERANCE_A = 1.5`; eager seeding mints a candidate Finding per
+  unmatched site. Historical data blatted again (migration `0018`).
 - **Date:** 2026-06-09.
 - **Phase B refinements (vs the original sketch below):** (1) `current_sf`
   STAYS on `Dataset` (crystal grain) — it is the map analogue of the
@@ -252,16 +263,24 @@ must meet so every RunDataset has a Run).
   events on `(run_dataset, event_num)`. PanDDA1's reader was untouched — it
   flows through the same reconcile and gets a synthetic run for free.
 
-**Phase C — Finding (human anchor).**
-- Migration: add `Finding`; add `Event.finding` (null).
-- Data migration: for each `Event` with a non-unreviewed `decision`, a built
-  `current_model`, or `pose_merged` → create a `Finding` at its
-  `detection_centroid` (fallback `xyz_centroid`), move the human columns +
-  `current_model` + `pose_merged` onto it, set `Event.finding`.
-- Eager-seed the rest: cluster remaining Observations per `Dataset` by centroid
-  into `unreviewed` Findings so the compare view is populated.
-- Migration: drop the moved columns from `Event` (after a release of
-  dual-read, or straight if pre-prod).
+**Phase C — Finding (human anchor). ✅ SHIPPED (decision-only).**
+- DONE differently: data blatted again (`0018` wipes), so no per-row backfill —
+  `Finding` + `Event.finding` added, the decision/review columns dropped off
+  `Event`. The built-model (`current_model` / `pose_merged`) did NOT move
+  (deferred — see scope note up top).
+- Association lives in `reconcile._associate_findings`, called per dataset after
+  events upsert: each event matches the crystal's nearest `Finding.centroid`
+  within `MATCH_TOLERANCE_A` (1.5 Å) on its `detection_centroid` (fallback
+  `xyz_centroid`), else eager-seeds a new unreviewed `Finding`. Findings are
+  never mutated by ingest — only created/linked — so human state is out of the
+  import path. The shared `Finding` is the cross-run decision channel.
+- API unchanged: `Event` read-through proxy properties + serializer `update()` /
+  `commit_model` write to `event.finding`. The summary's decision counts moved
+  to `finding__decision` lookups.
+- Open: the **frame guard** (assert apo `CRYST1` matches before cross-run
+  association) is NOT yet implemented — fine while all ingests share a native
+  frame, but a prerequisite before trusting association across differently
+  aligned runs. Tracked for Phase D.
 
 **Phase D — reconcile rewrite + association.**
 - Rewrite `reconcile.py` per "What changes" above; add the association pass and
