@@ -26,11 +26,20 @@ Policy ("surface, don't resolve"):
 A first ingest of a never-seen project is just the degenerate case: nothing to
 preserve, everything created.
 """
+import hashlib
 from dataclasses import dataclass, field
 
 from django.db import transaction
 
-from .models import Artifact, Dataset, Event, Project, Shell
+from .models import (
+    Artifact,
+    Dataset,
+    Event,
+    Project,
+    Run,
+    RunDataset,
+    Shell,
+)
 
 # The imported artifact kinds whose relpaths constitute a dataset's "input
 # bytes" — what a built/refined model derives from. A change here is what
@@ -113,8 +122,16 @@ class ReconcileResult:
 
 
 @transaction.atomic
-def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
-    """Apply ``spec`` under the re-ingest policy; return a summary."""
+def reconcile_project(spec: ProjectSpec, run: Run = None) -> ReconcileResult:
+    """Apply ``spec`` under the re-ingest policy; return a summary.
+
+    ``run`` is the PanDDA run this ingest is the output of: its analysis
+    metrics land on a RunDataset (one per run x crystal), so two runs of the
+    same crystal coexist instead of clobbering each other. The lifecycle path
+    passes its Run; standalone/CLI ingest passes None and we synthesise a
+    deterministic Run keyed on (project, source_root) so re-ingesting the same
+    tree is idempotent (same Run -> same RunDataset -> in-place upsert).
+    """
     project, created = Project.objects.get_or_create(
         name=spec.name, defaults={"source_root": spec.source_root}
     )
@@ -122,6 +139,9 @@ def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
         # source_root may have moved (re-ingested from a new path).
         project.source_root = spec.source_root
         project.save(update_fields=["source_root"])
+
+    if run is None:
+        run = _synthetic_run(project, spec.source_root)
 
     res = ReconcileResult(created=created)
     seen_dataset_ids = []
@@ -131,7 +151,9 @@ def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
         seen_dataset_ids.append(ds.id)
         res.n_datasets += 1
 
-        _reconcile_events(ds, ds_spec, res)
+        # This run's metrics on the (run, crystal) row; events hang off it.
+        run_dataset = _upsert_run_dataset(run, ds, ds_spec)
+        _reconcile_events(run_dataset, ds_spec, res)
         ds_inputs_after = _replace_imported_dataset_artifacts(
             project, ds, ds_spec
         )
@@ -167,24 +189,54 @@ def reconcile_project(spec: ProjectSpec) -> ReconcileResult:
 # --- datasets -------------------------------------------------------------
 
 
-def _upsert_dataset(project, ds_spec):
-    """Create or update a Dataset; metrics move, identity is (project, dtag).
+def _synthetic_run(project, source_root):
+    """Get-or-create the placeholder Run that stands in for a standalone /
+    CLI ingest (no lifecycle Run). Keyed deterministically on (project,
+    source_root) so re-ingesting the same tree reuses it — the re-ingest
+    idempotency the old single-row model got for free."""
+    digest = hashlib.sha256(
+        f"{project.id}:{source_root}".encode()
+    ).hexdigest()
+    run, _ = Run.objects.get_or_create(
+        idempotency_key=f"ingest:{digest}",
+        defaults={
+            "project": project,
+            "group": "local-ingest",
+            "share_path": source_root,
+            "out_dir": source_root,
+            "status": Run.Status.SUCCEEDED,
+        },
+    )
+    return run
 
-    Returns ``(dataset, input_relpaths_before)`` — the set of imported input
-    relpaths *before* this re-ingest, used to detect input drift.
+
+def _upsert_dataset(project, ds_spec):
+    """Create or update the crystal Dataset (run-INDEPENDENT identity).
+
+    Only crystal-grain state moves here (subtitle, ligand_source) — the
+    analysis metrics live on RunDataset now. Returns ``(dataset,
+    input_relpaths_before)`` — the imported input relpaths *before* this
+    re-ingest, used to detect input drift.
     """
     ds, _ = Dataset.objects.get_or_create(
         project=project, dtag=ds_spec.dtag
     )
     inputs_before = _imported_input_relpaths(ds)
-    # Machine metrics + subtitle + ligand-source provenance move in place;
-    # human state lives on Events, not here, so nothing on Dataset to protect.
     ds.subtitle = ds_spec.subtitle
     ds.ligand_source = ds_spec.ligand_source
-    for k, v in ds_spec.metrics.items():
-        setattr(ds, k, v)
     ds.save()
     return ds, inputs_before
+
+
+def _upsert_run_dataset(run, dataset, ds_spec):
+    """Create or update the (run, crystal) row carrying this run's metrics.
+    Re-ingesting the SAME run upserts in place; a different run gets its own
+    row, so the two runs' metrics never collide."""
+    rd, _ = RunDataset.objects.get_or_create(run=run, dataset=dataset)
+    for k, v in ds_spec.metrics.items():
+        setattr(rd, k, v)
+    rd.save()
+    return rd
 
 
 def _imported_input_relpaths(dataset) -> set[str]:
@@ -199,13 +251,22 @@ def _imported_input_relpaths(dataset) -> set[str]:
 # --- events ---------------------------------------------------------------
 
 
-def _reconcile_events(dataset, ds_spec, res):
-    """Upsert events by (dataset, event_num); metrics move, decisions stay."""
+def _reconcile_events(run_dataset, ds_spec, res):
+    """Upsert events by (run_dataset, event_num); metrics move, decisions stay.
+
+    The key is now run-scoped, so re-ingesting the SAME run upserts the same
+    event rows (decisions preserved) while a DIFFERENT run's events land under
+    its own run_dataset and never collide. event.dataset is set in lockstep as
+    the run-independent crystal pointer."""
+    dataset = run_dataset.dataset
     for ev_spec in ds_spec.events:
         event, created = Event.objects.get_or_create(
-            dataset=dataset, event_num=ev_spec.event_num
+            run_dataset=run_dataset,
+            event_num=ev_spec.event_num,
+            defaults={"dataset": dataset},
         )
-        # Machine fields update in place.
+        # Machine fields update in place; keep the crystal pointer in lockstep.
+        event.dataset = dataset
         event.site_num = ev_spec.site_num
         for k, v in ev_spec.metrics.items():
             setattr(event, k, v)

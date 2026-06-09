@@ -330,7 +330,10 @@ def _complete(run: Run) -> Run:
         return run
 
     call_command(
-        "ingest_pandda2", project=run.project.name, root=run.out_dir
+        "ingest_pandda2",
+        project=run.project.name,
+        root=run.out_dir,
+        run=run.id,
     )
     run.status = Run.Status.SUCCEEDED
     run.completed_at = timezone.now()

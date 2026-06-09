@@ -204,8 +204,11 @@ class IngestSelfHealTests(TestCase):
         # CIF embedded from the manifest path (no symlink follow needed).
         lig = ds.artifacts.get(kind=Artifact.Kind.LIGAND)
         self.assertIn("LIG", lig.contents)
-        # Resolution filled from input.yaml (CSV cell was blank).
-        self.assertAlmostEqual(ds.analysed_resolution, 1.71)
+        # Resolution filled from input.yaml (CSV cell was blank). Now lives on
+        # the per-run RunDataset, surfaced via the primary-run bridge.
+        self.assertAlmostEqual(
+            ds.primary_run_dataset.analysed_resolution, 1.71
+        )
 
     def test_unreachable_source_leaves_stub_and_reports(self):
         # Point the manifest at a non-existent source: cannot self-heal.

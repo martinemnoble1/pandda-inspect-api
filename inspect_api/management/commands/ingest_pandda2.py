@@ -49,7 +49,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from inspect_api.conventions import detect_map_columns
-from inspect_api.models import Artifact
+from inspect_api.models import Artifact, Run
 from inspect_api.pandda2_input import is_xsym_stub, load_input_yaml
 from inspect_api.reconcile import (
     ArtifactSpec,
@@ -84,6 +84,14 @@ class Command(BaseCommand):
             help="Path to the PanDDA2 out_dir (contains processed_datasets/ "
             "and analyses/).",
         )
+        parser.add_argument(
+            "--run",
+            type=int,
+            default=None,
+            help="Id of the Run this tree is the output of. Omit for "
+            "standalone/CLI ingest — reconcile synthesises a deterministic "
+            "Run so re-ingest stays idempotent.",
+        )
 
     def handle(self, *args, **opts):  # noqa: ARG002 (Command signature)
         name = opts["project"]
@@ -101,7 +109,12 @@ class Command(BaseCommand):
 
         report = _InputReport()
         spec = self._build_spec(name, root, rows, report)
-        res = reconcile_project(spec)
+        run = None
+        if opts.get("run") is not None:
+            run = Run.objects.filter(pk=opts["run"]).first()
+            if run is None:
+                raise CommandError(f"--run {opts['run']} does not exist.")
+        res = reconcile_project(spec, run=run)
 
         n_event_maps = sum(
             1 for d in spec.datasets for e in d.events if e.event_map_relpath

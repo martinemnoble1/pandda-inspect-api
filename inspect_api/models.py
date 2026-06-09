@@ -35,7 +35,14 @@ class Project(models.Model):
 
 
 class Dataset(models.Model):
-    """One crystal / dtag within a project, with its analysis metrics."""
+    """One crystal / dtag within a project — the run-INDEPENDENT anchor.
+
+    Identity is (project, dtag). The per-run analysis metrics (resolution,
+    R-factors, map uncertainty) do NOT live here — different runs of the same
+    crystal can disagree, so they live on RunDataset. What stays here is what is
+    a property of the crystal itself: its dtag, ligand spec, and the curated
+    whole-crystal model of record (current_model / current_sf, crystal grain by
+    decision — see docs/MULTI_RUN_DATA_MODEL.md)."""
 
     class LigandSource(models.TextChoices):
         # Best-available ligand-spec slot found at ingest, mirroring PanDDA2's
@@ -60,12 +67,9 @@ class Dataset(models.Model):
         default=LigandSource.NONE,
     )
 
-    analysed_resolution = models.FloatField(null=True, blank=True)
-    high_resolution = models.FloatField(null=True, blank=True)
-    low_resolution = models.FloatField(null=True, blank=True)
-    r_free = models.FloatField(null=True, blank=True)
-    r_work = models.FloatField(null=True, blank=True)
-    map_uncertainty = models.FloatField(null=True, blank=True)
+    # NB the per-run analysis metrics (analysed/high/low_resolution, r_free,
+    # r_work, map_uncertainty) moved to RunDataset — they are a run's opinion of
+    # the crystal, not the crystal. Read them via ``primary_run_dataset`` below.
 
     # The best model for the WHOLE crystal — a refined pdb (you refine the
     # whole asymmetric unit against one dataset's reflections). Distinct from
@@ -107,6 +111,17 @@ class Dataset(models.Model):
     def __str__(self):
         return f"{self.project.name}/{self.dtag}"
 
+    @property
+    def primary_run_dataset(self):
+        """The representative RunDataset whose metrics back the single-run API
+        (serializers, summary). Until the multi-run compare UI lands (Phase E),
+        this is the latest run's analysis of this crystal — the same value the
+        old Dataset.<metric> fields held when there was only ever one run.
+        ``None`` if the crystal has not been analysed by any run yet."""
+        return self.run_datasets.order_by(
+            "-run__submitted_at", "-id"
+        ).first()
+
 
 class Event(models.Model):
     """
@@ -123,8 +138,22 @@ class Event(models.Model):
         NO_HIT = "no_hit", "No hit"
         AMBIGUOUS = "ambiguous", "Ambiguous"
 
+    # Two scope FKs: ``dataset`` is the run-INDEPENDENT crystal this event sits
+    # in (kept for the many callers that ask "which crystal?"); ``run_dataset``
+    # is the AUTHORITATIVE run scope — which run detected this event, and the
+    # key half of its identity (run_dataset, event_num). They are kept
+    # consistent at ingest (run_dataset.dataset == dataset). event_num is a
+    # per-run ordinal, so it is unique only WITHIN a run_dataset — never across
+    # runs (see docs/MULTI_RUN_DATA_MODEL.md).
     dataset = models.ForeignKey(
         Dataset, on_delete=models.CASCADE, related_name="events"
+    )
+    run_dataset = models.ForeignKey(
+        "RunDataset",
+        on_delete=models.CASCADE,
+        related_name="events",
+        null=True,
+        blank=True,
     )
     event_num = models.IntegerField()
     site_num = models.IntegerField(null=True, blank=True)
@@ -207,8 +236,13 @@ class Event(models.Model):
 
     class Meta:
         constraints = [
+            # Identity is (run_dataset, event_num): event_num is a per-run
+            # ordinal, so the SAME crystal analysed by two runs holds two
+            # event_num=1 rows under different run_datasets — they must not
+            # collide. (Was (dataset, event_num), which conflated runs.)
             models.UniqueConstraint(
-                fields=["dataset", "event_num"], name="uniq_dataset_event"
+                fields=["run_dataset", "event_num"],
+                name="uniq_run_dataset_event",
             )
         ]
         ordering = ["dataset__dtag", "event_num"]
@@ -511,3 +545,39 @@ class Run(models.Model):
     def __str__(self):
         return f"run:{self.project.external_id or self.project.name}" \
                f"/{self.group}:{self.status}"
+
+
+class RunDataset(models.Model):
+    """One Run's analysis of one Dataset (crystal) — the Run x Crystal grain.
+
+    The per-run analysis metrics live here, NOT on Dataset, because two runs of
+    the same crystal can reach different numbers (different resolution cutoffs,
+    scaling, characterisation set). Created at ingest, one per (run, dtag); the
+    crystal's own durable state (current_model, decisions) stays off this row.
+    See docs/MULTI_RUN_DATA_MODEL.md."""
+
+    run = models.ForeignKey(
+        Run, on_delete=models.CASCADE, related_name="run_datasets"
+    )
+    dataset = models.ForeignKey(
+        Dataset, on_delete=models.CASCADE, related_name="run_datasets"
+    )
+
+    # This run's opinion of the crystal (moved off Dataset).
+    analysed_resolution = models.FloatField(null=True, blank=True)
+    high_resolution = models.FloatField(null=True, blank=True)
+    low_resolution = models.FloatField(null=True, blank=True)
+    r_free = models.FloatField(null=True, blank=True)
+    r_work = models.FloatField(null=True, blank=True)
+    map_uncertainty = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "dataset"], name="uniq_run_dataset"
+            )
+        ]
+        ordering = ["dataset__dtag"]
+
+    def __str__(self):
+        return f"{self.dataset.dtag}@run{self.run_id}"
