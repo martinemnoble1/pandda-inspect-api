@@ -248,6 +248,11 @@ class Command(BaseCommand):
                         "xyz_centroid": [c for c in xyz if c is not None]
                         or [],
                         "xyz_peak": [],
+                        # Run-stable detection locus from events.yaml voxels
+                        # (Position Array) — the cross-run match key, distinct
+                        # from build-snapped xyz_centroid. [] when no voxels.
+                        "detection_centroid": build.get("detection_centroid")
+                        or [],
                         # Per-event autobuild quality (from events.yaml Build:).
                         "build_score": build.get("build_score"),
                         "rscc": build.get("rscc"),
@@ -291,22 +296,28 @@ class Command(BaseCommand):
             idx = _i(key)
             if idx is None or not isinstance(ev, dict):
                 continue
-            build = ev.get("Build")
-            if not isinstance(build, dict):
-                continue
+            # Detection locus is read for EVERY event, independent of Build:
+            # an event with no autobuild still has a density blob to centre on
+            # and to match across runs.
             info = {
-                "build_score": _f(build.get("Build Score")),
-                "rscc": _f(build.get("RSCC")),
-                "optimal_contour": _f(build.get("Optimal Contour")),
+                "detection_centroid": _position_array_centroid(ev),
+                "build_score": None,
+                "rscc": None,
+                "optimal_contour": None,
                 "pose_relpath": None,
             }
-            bpath = build.get("Build Path")
-            if bpath:
-                try:
-                    rel = Path(bpath).resolve().relative_to(root)
-                    info["pose_relpath"] = str(rel)
-                except (ValueError, OSError):
-                    info["pose_relpath"] = None  # outside root — drop
+            build = ev.get("Build")
+            if isinstance(build, dict):
+                info["build_score"] = _f(build.get("Build Score"))
+                info["rscc"] = _f(build.get("RSCC"))
+                info["optimal_contour"] = _f(build.get("Optimal Contour"))
+                bpath = build.get("Build Path")
+                if bpath:
+                    try:
+                        rel = Path(bpath).resolve().relative_to(root)
+                        info["pose_relpath"] = str(rel)
+                    except (ValueError, OSError):
+                        info["pose_relpath"] = None  # outside root — drop
             out[idx] = info
         return out
 
@@ -553,3 +564,28 @@ def _b(v):
     if v in (None, "", "None"):
         return None
     return str(v).strip().lower() in ("true", "1", "yes")
+
+
+def _position_array_centroid(ev: dict) -> list:
+    """Mean of the event-cluster voxel coords (events.yaml ``Position Array``)
+    — the run-stable DETECTION locus, where the density blob actually is.
+
+    UNLIKE the top-level ``Centroid`` / CSV x,y,z (which equal the autobuild
+    *Build* centroid and wander ~20A with a bad build), this tracks the blob:
+    two runs of the same crystal agree on it to sub-A, so it is the key for
+    matching events across runs (docs/MULTI_RUN_DATA_MODEL.md). Returns ``[]``
+    for a missing / empty / malformed array (PanDDA1, or no voxels recorded).
+    """
+    arr = ev.get("Position Array")
+    if not isinstance(arr, list) or not arr:
+        return []
+    sx = sy = sz = 0.0
+    n = 0
+    for p in arr:
+        if (
+            isinstance(p, (list, tuple))
+            and len(p) == 3
+            and all(isinstance(c, (int, float)) for c in p)
+        ):
+            sx, sy, sz, n = sx + p[0], sy + p[1], sz + p[2], n + 1
+    return [sx / n, sy / n, sz / n] if n else []

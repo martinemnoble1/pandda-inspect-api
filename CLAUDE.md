@@ -75,7 +75,15 @@ PanDDA2 ingest facts that bit us (all real, from a BAZ2B run):
     can mask `reconcile.py` edits; clear it if counts look wrong.
 
 Re-running an ingest **clobbers** decision state (replace, not reconcile). The
-reconciliation policy for re-ingest / PanDDA-rerun is an open design question.
+reconciliation policy for re-ingest / PanDDA-rerun is an open design question —
+a proposed answer (run-scoped Observations + run-independent Findings, for the
+*different-run* case) is in
+[docs/MULTI_RUN_DATA_MODEL.md](docs/MULTI_RUN_DATA_MODEL.md). NB the merge key
+`(dtag, event_num)` is an unstable per-run ordinal: across two runs A `event 1`
+can be the same blob as B `event 2` (verified). To match events across runs use
+the detection-cluster centroid (from `events.yaml` `Position Array` voxels), NOT
+`xyz_centroid` (build-contaminated == Build centroid) or autobuild poses (they
+wander ~20Å across runs).
 
 ## Artifact serving / in-place ingest
 
