@@ -619,15 +619,27 @@ export function InspectDrawer({
   const setDecision = useCallback(
     async (ev: PanddaEvent, decision: string) => {
       const updated = await api.setDecision(ev.id, { decision });
+      // The decision lives on the run-independent Finding, so it applies to
+      // EVERY event sharing that finding — the same binding site seen by other
+      // runs. Push the decision/review subset to those siblings too.
+      const shared = (e: PanddaEvent) =>
+        ev.finding != null ? e.finding === ev.finding : e.id === ev.id;
+      const review = {
+        decision: updated.decision,
+        confidence: updated.confidence,
+        comment: updated.comment,
+        inspected_by: updated.inspected_by,
+        inspected_at: updated.inspected_at,
+      };
+      const apply = (e: PanddaEvent) =>
+        e.id === ev.id ? { ...e, ...updated } : { ...e, ...review };
       setDatasets((prev) =>
         prev.map((ds) => ({
           ...ds,
-          events: ds.events.map((e) =>
-            e.id === ev.id ? { ...e, ...updated } : e
-          ),
+          events: ds.events.map((e) => (shared(e) ? apply(e) : e)),
         }))
       );
-      setSelected((s) => (s && s.id === ev.id ? { ...s, ...updated } : s));
+      setSelected((s) => (s && shared(s) ? apply(s) : s));
     },
     []
   );
@@ -862,6 +874,12 @@ export function InspectDrawer({
     const key =
       axis === "dataset"
         ? selected.dtag
+        : axis === "finding"
+        ? `${selected.dtag}-${
+            selected.finding != null
+              ? `f-${selected.finding}`
+              : `u-${selected.event_num}`
+          }`
         : selected.site_num == null
         ? "unassigned"
         : `site-${selected.site_num}`;
@@ -928,6 +946,7 @@ export function InspectDrawer({
           >
             <ToggleButton value="dataset">Dataset</ToggleButton>
             <ToggleButton value="site">Site</ToggleButton>
+            <ToggleButton value="finding">Finding</ToggleButton>
           </ToggleButtonGroup>
         </Stack>
         {!cootInitialized && (
@@ -940,7 +959,11 @@ export function InspectDrawer({
             size="small"
             fullWidth
             placeholder={
-              axis === "dataset" ? "Filter datasets…" : "Filter sites…"
+              axis === "dataset"
+                ? "Filter datasets…"
+                : axis === "finding"
+                ? "Filter findings…"
+                : "Filter sites…"
             }
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -986,7 +1009,11 @@ export function InspectDrawer({
       <Box sx={{ flex: 1, overflow: "auto", minHeight: 0 }}>
         {groups.map((g) => {
           const isLiveGroup =
-            axis === "dataset" && selected?.dtag === g.key;
+            axis === "dataset"
+              ? selected?.dtag === g.key
+              : axis === "finding"
+              ? g.events.some((e) => e.id === selected?.id)
+              : false;
           return (
             <Accordion
               key={g.key}
@@ -1169,6 +1196,8 @@ export function InspectDrawer({
                   Click an event to view it in 3D · label is{" "}
                   {axis === "site"
                     ? "crystal : event"
+                    : axis === "finding"
+                    ? "run · RSCC (same site, each run's build)"
                     : "event · quality (1 − BDC)"}
                 </Typography>
                 <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
@@ -1184,9 +1213,18 @@ export function InspectDrawer({
                         : "—";
                     const qStr =
                       q != null ? `${Math.round(q * 100)}%` : "—";
+                    const runLabel =
+                      ev.run_group ??
+                      (ev.run_id != null ? `run ${ev.run_id}` : "run ?");
                     const label =
                       axis === "site"
                         ? `${ev.dtag}:${ev.event_num}`
+                        : axis === "finding"
+                        ? `${runLabel} · ${
+                            ev.rscc != null
+                              ? `RSCC ${ev.rscc.toFixed(2)}`
+                              : `ev${ev.event_num}`
+                          }`
                         : `Event ${ev.event_num} · ${qStr}`;
                     const tip = (
                       <Box sx={{ fontSize: 12, lineHeight: 1.5 }}>
@@ -1195,6 +1233,9 @@ export function InspectDrawer({
                             {ev.dtag} · event {ev.event_num}
                           </strong>
                         </div>
+                        {ev.run_group != null && (
+                          <div>Run: {ev.run_group}</div>
+                        )}
                         <div>Quality (1 − BDC): {qStr}</div>
                         <div>Event fraction: {occ}</div>
                         <div>Z-peak: {ev.z_peak?.toFixed(1) ?? "—"}</div>
@@ -1288,7 +1329,13 @@ export function InspectDrawer({
         })}
         {groups.length === 0 && (
           <Typography color="text.secondary" sx={{ p: 2 }} variant="body2">
-            No {axis === "dataset" ? "datasets" : "sites"} to show.
+            No{" "}
+            {axis === "dataset"
+              ? "datasets"
+              : axis === "finding"
+              ? "findings"
+              : "sites"}{" "}
+            to show.
           </Typography>
         )}
       </Box>

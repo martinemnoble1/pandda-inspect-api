@@ -188,7 +188,9 @@ class DatasetViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DatasetSerializer
 
     def get_queryset(self):
-        qs = Dataset.objects.all().prefetch_related("events", "artifacts")
+        qs = Dataset.objects.all().prefetch_related(
+            "events__run_dataset__run", "events__artifacts", "artifacts"
+        )
         project = self.request.query_params.get("project")
         if project:
             qs = qs.filter(project__name=project)
@@ -212,7 +214,7 @@ class EventViewSet(
     def get_queryset(self):
         qs = (
             Event.objects.all()
-            .select_related("dataset")
+            .select_related("dataset", "run_dataset__run", "finding")
             .prefetch_related("artifacts", "dataset__artifacts")
         )
         dtag = self.request.query_params.get("dtag")

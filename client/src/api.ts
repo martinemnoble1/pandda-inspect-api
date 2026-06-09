@@ -89,6 +89,13 @@ export interface PanddaEvent {
   id: number;
   dataset: number;
   dtag: string;
+  // Multi-run context: which run produced this observation (run_group is the
+  // human label), and which run-independent Finding (binding site) it belongs
+  // to. Events sharing a finding are the same site seen by different runs and
+  // share ONE decision. null run_* for legacy/PanDDA1; null finding = no locus.
+  run_id: number | null;
+  run_group: string | null;
+  finding: number | null;
   event_num: number;
   site_num: number | null;
   event_fraction: number | null;

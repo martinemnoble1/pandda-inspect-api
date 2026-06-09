@@ -1,10 +1,19 @@
 # ADR: Multi-run data model — Crystal / RunDataset / Observation / Finding
 
-- **Status:** **Phase A + B + C shipped** (the rest Proposed). Phase A:
-  `Event.detection_centroid` (#32). Phase B (#33): `RunDataset`,
-  `Event.run_dataset`, metrics moved off `Dataset`, reconcile run-scoped.
-  Phase C: `Finding` (run-independent decision anchor) + spatial association.
-  Empirical basis validated against two real BAZ2B runs (below).
+- **Status:** **Phase A + B + C shipped; Phase E (compare UI, first cut)
+  in progress.** Phase A: `Event.detection_centroid` (#32). Phase B (#33):
+  `RunDataset`, `Event.run_dataset`, metrics off `Dataset`, reconcile
+  run-scoped. Phase C (#34): `Finding` (run-independent decision anchor) +
+  spatial association. Phase E: a `Finding` grouping axis in the client (per-run
+  observation chips under each binding site, one shared decision) + the additive
+  `run_id`/`run_group`/`finding` Event API fields. **Phase D (frame guard) was
+  assessed and DROPPED** — association already degrades gracefully under a frame
+  mismatch (mismatched-frame centroids never fall within the 1.5 Å tolerance, so
+  they seed separate Findings rather than false-merging), and the cheap signal
+  (apo `CRYST1`) is the native cell, identical across runs regardless of
+  alignment, so it wouldn't detect the case it targeted. **Side-by-side per-run
+  columns deferred to Phase F.** Empirical basis validated against two real
+  BAZ2B runs (below).
 - **Phase C scope (decision-only, by decision):** only the decision/review
   state (`decision`, `confidence`, `comment`, `inspected_*`) moved to `Finding`.
   `Event.current_model` / `pose_merged` (the built-ligand pointer) stayed on

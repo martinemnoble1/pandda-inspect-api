@@ -6,13 +6,13 @@ import type { Dataset, PanddaEvent } from "./api";
  * recurrent binding location across many crystals) — is a small addition once
  * hit positions are validated. See README / the inspect drawer.
  */
-export type GroupAxis = "dataset" | "site";
+export type GroupAxis = "dataset" | "site" | "finding";
 
 export interface EventGroup {
-  key: string; // stable id for the group (dtag, or "site-N")
+  key: string; // stable id for the group (dtag, "site-N", or "<dtag>-f-N")
   title: string; // header label
   subtitle?: string; // secondary label (compound name, dataset count…)
-  dataset?: Dataset; // present when grouping by dataset
+  dataset?: Dataset; // present when grouping by dataset OR finding (one crystal)
   events: PanddaEvent[];
 }
 
@@ -174,6 +174,40 @@ export function groupEvents(
       dataset: ds,
       events: ds.events,
     }));
+  }
+
+  if (axis === "finding") {
+    // One group per binding site (Finding) on a crystal, gathering that site's
+    // per-run observations — the multi-run compare view. A Finding belongs to
+    // one crystal, so the dataset reference (and its model/metrics UI) carries
+    // over. Events sharing a Finding share ONE decision (run-independent).
+    const groups: EventGroup[] = [];
+    for (const ds of datasets) {
+      const byFinding = new Map<string, PanddaEvent[]>();
+      for (const ev of ds.events) {
+        // Unlinked events (no locus at ingest) stand alone, keyed by event_num.
+        const key = ev.finding != null ? `f-${ev.finding}` : `u-${ev.event_num}`;
+        (byFinding.get(key) ?? byFinding.set(key, []).get(key)!).push(ev);
+      }
+      for (const [key, events] of byFinding) {
+        const c = events[0].xyz_centroid;
+        const locus =
+          c && c.length === 3
+            ? ` · (${c.map((n) => n.toFixed(0)).join(",")})`
+            : "";
+        const runs = new Set(
+          events.map((e) => e.run_group ?? String(e.run_id))
+        ).size;
+        groups.push({
+          key: `${ds.dtag}-${key}`,
+          title: `${ds.dtag}${locus}`,
+          subtitle: `${runs} run${runs === 1 ? "" : "s"}`,
+          dataset: ds,
+          events,
+        });
+      }
+    }
+    return groups;
   }
 
   // axis === "site": collect events across all datasets, keyed by site_num.
