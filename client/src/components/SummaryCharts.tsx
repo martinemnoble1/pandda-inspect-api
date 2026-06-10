@@ -86,9 +86,12 @@ function Histogram({
 export function SummaryCharts({
   distributions,
   sites,
+  onSiteClick,
 }: {
   distributions: Distributions;
   sites: SiteSummary[];
+  // Clicking a site bar jumps to that site in the Moorhen viewer (deep-link).
+  onSiteClick?: (siteNum: number) => void;
 }) {
   // Events-per-site, STACKED by decision (replaces PanDDA1's
   // analyse_events_site_N pies). One bar per site whose total height is the
@@ -179,6 +182,20 @@ export function SummaryCharts({
                     beginAtZero: true,
                     ticks: { precision: 0 },
                   },
+                },
+                // Click a bar → open that site in Moorhen (deep-link). The
+                // clicked element's index maps to sites[index]; pointer cursor
+                // on hover signals the affordance.
+                onClick: (_evt, elements) => {
+                  const i = elements?.[0]?.index;
+                  if (i != null && sites[i]) onSiteClick?.(sites[i].site_num);
+                },
+                onHover: (evt, elements) => {
+                  const target = evt?.native?.target as HTMLElement | null;
+                  if (target) {
+                    target.style.cursor =
+                      onSiteClick && elements?.length ? "pointer" : "default";
+                  }
                 },
               }}
             />

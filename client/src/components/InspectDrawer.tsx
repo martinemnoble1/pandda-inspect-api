@@ -90,6 +90,9 @@ interface Props {
   glRef: RefObject<unknown>;
   commandCentre: RefObject<moorhen.CommandCentre | null>;
   cootInitialized: boolean;
+  // Deep-link target: open in Site mode focused on this site_num (from a
+  // dashboard site-bar click). null = normal entry.
+  initialSite?: number | null;
 }
 
 // PanDDA event maps are contoured in ABSOLUTE map units, not σ. They're
@@ -216,6 +219,7 @@ export function InspectDrawer({
   glRef,
   commandCentre,
   cootInitialized,
+  initialSite,
 }: Props) {
   const dispatch = useDispatch();
   // Redux is the LIVE source of truth for map contour/visibility/active state —
@@ -241,6 +245,10 @@ export function InspectDrawer({
   );
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [axis, setAxis] = useState<GroupAxis>("dataset");
+  // Ref mirror so loadEvent picks the model rendition for the CURRENT tab
+  // (ribbons in Site mode) without being re-created on every axis change.
+  const axisRef = useRef(axis);
+  axisRef.current = axis;
   const [sort, setSort] = useState<SortKey>("dtag");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<DatasetFilter>("active");
@@ -434,13 +442,25 @@ export function InspectDrawer({
                 // Non-fatal: fall back to bare-atom rendering.
               }
             }
-            await mol.addRepresentation("CBs", "/*/*");
+            // Backbone rendition follows the grouping tab: in SITE mode draw
+            // RIBBONS (CRs) for spatial context while scanning sites, plus the
+            // bound ligand as sticks ("ligands") so the site itself stays
+            // visible; otherwise bonds (CBs) for detailed building. Read the ref
+            // so it tracks the tab at load time. NB switching tabs re-skins on
+            // the NEXT model load, not the currently-shown one.
+            const modelStyles =
+              axisRef.current === "site" ? ["CRs", "ligands"] : ["CBs"];
+            for (const style of modelStyles) {
+              await mol.addRepresentation(style, "/*/*");
+            }
             // addDict does NOT redraw, so the first draw above perceives bonds
             // without the dict (all single bonds). Re-perceive WITH the dict so
             // aromatic/double orders render — the proven 0.23 dirty+redraw.
             if (dictLoaded) {
               mol.setAtomsDirty(true);
-              await mol.fetchIfDirtyAndDraw("CBs");
+              for (const style of modelStyles) {
+                await mol.fetchIfDirtyAndDraw(style);
+              }
             }
             // Hide H on the freshly-loaded model if the toggle is on (default).
             // Read the REF so a fresh model adopts the current preference. No-op
@@ -798,6 +818,26 @@ export function InspectDrawer({
     ]
   );
   loadEventRef.current = loadEvent;
+
+  // Deep-link consume: arriving via ?site=N (a dashboard site-bar click) opens
+  // the viewer in SITE mode focused on that site. Wait until datasets + Coot are
+  // ready, then switch the tab and load the site's first event. Consume ONCE (a
+  // ref guard) so later renders don't re-fire it. A fresh navigation is a fresh
+  // InspectPage mount, so the guard resets and re-clicking a bar works.
+  const consumedSiteRef = useRef(false);
+  useEffect(() => {
+    if (consumedSiteRef.current) return;
+    if (initialSite == null || !cootInitialized || datasets.length === 0) {
+      return;
+    }
+    const ev = datasets
+      .flatMap((d) => d.events)
+      .find((e) => e.site_num === initialSite);
+    consumedSiteRef.current = true;
+    if (!ev) return;
+    setAxis("site");
+    loadEvent(ev);
+  }, [initialSite, cootInitialized, datasets, loadEvent]);
 
   // Contour ONE of the loaded maps (by molNo). The slider value is in that
   // map's native unit: event maps ABSOLUTE (pass straight to Coot), model maps
