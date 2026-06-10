@@ -35,6 +35,14 @@ const MapCtor = _Map as unknown as new (
   store: unknown
 ) => MoorhenMapLike;
 
+// A live representation on a molecule. `cid` is the atom selection; assigning a
+// new value then calling redraw() rebuilds the buffers from it (MoorhenMolecule
+// Representation.redraw reads this.cid) — how we toggle hydrogen visibility.
+export interface MoorhenRepresentationLike {
+  style: string;
+  cid: string;
+  redraw(): Promise<void>;
+}
 export interface MoorhenMoleculeLike {
   name: string;
   molNo: number;
@@ -46,9 +54,20 @@ export interface MoorhenMoleculeLike {
     name: string,
     options?: RequestInit
   ): Promise<unknown>;
-  addRepresentation(style: string, cid: string): Promise<unknown>;
+  // Returns the created representation (mutable cid + redraw) so callers can
+  // re-perceive/redraw IT after a dict load, rather than fetchIfDirtyAndDraw
+  // (which hardcodes cid "/*/*/*/*" and would add a duplicate full-atom rep,
+  // re-showing hydrogens through our [!H] selection).
+  addRepresentation(
+    style: string,
+    cid: string
+  ): Promise<MoorhenRepresentationLike>;
   delete(): Promise<unknown>;
   addDict(dict: string): Promise<unknown>;
+  // Re-read the molecule's atoms/bonds (after addDict) so a subsequent
+  // representation redraw perceives the dictionary's bond orders. Pair with
+  // rep.redraw() instead of fetchIfDirtyAndDraw to avoid the duplicate-rep bug.
+  updateAtoms(): Promise<void>;
   // Add a colour rule. For a single WHOLE-MOLECULE colour (used to tint a
   // pinned sibling's pose by its source hue, A5): ruleType "molecule", cid
   // "//*", a hex colour, args ["//*", hex]. Call BEFORE addRepresentation so the
@@ -67,12 +86,12 @@ export interface MoorhenMoleculeLike {
   // renders all-single-bonds even with a correct dict.
   setAtomsDirty(state: boolean): void;
   fetchIfDirtyAndDraw(style: string): Promise<unknown>;
-  // Hide a CID selection from the bond display WITHOUT deleting atoms (Coot
-  // add_to_non_drawn_bonds) — reversible via unhideAll (clear_non_drawn_bonds).
-  // Used to hide hydrogens (`/*/*/*/[H]:*`) for easier editing while leaving the
-  // coordinates intact, so Save still exports them. Non-destructive (D).
-  hideCid(cid: string, redraw?: boolean): Promise<void>;
-  unhideAll(redraw?: boolean): Promise<void>;
+  // Live representations on this molecule. Each has a mutable `cid` (atom
+  // selection) and `redraw()`, which rebuilds its buffers from that cid — so
+  // hydrogens are hidden/shown by swapping the cid to `[!H]` / `/*/*` and
+  // redrawing, the atom-level mechanism (NOT residue-level hideCid). See
+  // bondsCidFor / onToggleHydrogens.
+  representations: MoorhenRepresentationLike[];
   // Export the molecule's current coordinates as a string (PDB by default) —
   // used to persist a Coot-merged model back through the API (the build
   // action: merge in Coot, land the bytes server-side).

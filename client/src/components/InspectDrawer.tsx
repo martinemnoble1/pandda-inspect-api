@@ -110,12 +110,16 @@ const EVENT_LEVEL_MAX = 6.0; // absolute slider ceiling for event maps
 // single binding pocket. ~0.35 focuses on the event without clipping its
 // surroundings.
 const EVENT_ZOOM = 0.35;
-// CID selecting all hydrogen atoms (the complement of Moorhen's own `[!H]`
-// exclusion). Hidden via Coot's non-drawn-bonds (mol.hideCid) so the protein is
-// lighter to edit/drag — non-destructively: the atoms stay in the molecule, so
-// Save still exports them and unhideAll brings them back (D, hide-hydrogens
-// toggle). NB most PanDDA models carry no H, so this is a no-op for them.
-const HYDROGEN_CID = "/*/*/*/[H]:*";
+// Hide hydrogens for easier editing by EXCLUDING them from the bond selection —
+// `[!H]` is Moorhen's own atom-level mechanism (see its "Hide Hydrogens"
+// toggle). NON-DESTRUCTIVE: coordinates are untouched, so Save keeps the H.
+// (The earlier mol.hideCid approach was WRONG — add_to_non_drawn_bonds works at
+// RESIDUE level, so a hydrogen CID matched whole residues and hid the entire
+// ligand — the "ligand draws then vanishes" bug.) Ribbons (CRs) draw no atoms,
+// so H exclusion is moot there → they keep the plain selection.
+const NO_H_CID = "/*/*/*/[!H]:*";
+const bondsCidFor = (style: string, hideHydrogens: boolean): string =>
+  style === "CRs" || !hideHydrogens ? "/*/*" : NO_H_CID;
 // Model-based maps stay in σ (their RMSD is meaningful — full-cell X-ray maps).
 const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
@@ -288,10 +292,11 @@ export function InspectDrawer({
   // dataset) — the merge target + what we export to persist a build.
   const modelMolRef = useRef<MoorhenMoleculeLike | null>(null);
   const [merging, setMerging] = useState(false);
-  // Hide hydrogens on the protein model for easier editing/dragging — default
-  // ON, with a toggle (the preference is split; D). Non-destructive (hideCid),
-  // so Save keeps the H. A ref mirrors it so loadEvent reads the CURRENT value
-  // at model-load time without being re-created on every toggle.
+  // Hide hydrogens on the model + poses for easier editing/dragging — default
+  // ON, with a toggle (the preference is split; D). Non-destructive: H are just
+  // EXCLUDED from the bond selection ([!H]), coords untouched, so Save keeps
+  // them. A ref mirrors it so loadEvent reads the CURRENT value at load time
+  // without being re-created on every toggle.
   const [hideHydrogens, setHideHydrogens] = useState(true);
   const hideHydrogensRef = useRef(hideHydrogens);
   hideHydrogensRef.current = hideHydrogens;
@@ -450,25 +455,26 @@ export function InspectDrawer({
             // the NEXT model load, not the currently-shown one.
             const modelStyles =
               axisRef.current === "site" ? ["CRs", "ligands"] : ["CBs"];
+            // Draw each rep with the H-aware selection (atom reps exclude H when
+            // the toggle is on; ribbons are unaffected). Fresh models adopt the
+            // current preference at load via the ref.
+            const hideH = hideHydrogensRef.current;
+            const modelReps = [];
             for (const style of modelStyles) {
-              await mol.addRepresentation(style, "/*/*");
+              modelReps.push(
+                await mol.addRepresentation(style, bondsCidFor(style, hideH))
+              );
             }
-            // addDict does NOT redraw, so the first draw above perceives bonds
-            // without the dict (all single bonds). Re-perceive WITH the dict so
-            // aromatic/double orders render — the proven 0.23 dirty+redraw.
+            // addDict doesn't redraw, so the first draw perceives bonds without
+            // the dict. Re-perceive WITH it (aromatic/double orders) by updating
+            // atoms then redrawing OUR reps. NOT fetchIfDirtyAndDraw — it
+            // hardcodes cid "/*/*/*/*", so against our [!H] selection it adds a
+            // duplicate full-atom rep that re-shows hydrogens (the bug behind
+            // "toggle looks inverted / waters balloon").
             if (dictLoaded) {
               mol.setAtomsDirty(true);
-              for (const style of modelStyles) {
-                await mol.fetchIfDirtyAndDraw(style);
-              }
-            }
-            // Hide H on the freshly-loaded model if the toggle is on (default).
-            // Read the REF so a fresh model adopts the current preference. No-op
-            // when the model has no hydrogens.
-            if (hideHydrogensRef.current) {
-              await mol.hideCid(HYDROGEN_CID, true).catch(() => {
-                /* non-fatal: cosmetic display preference */
-              });
+              await mol.updateAtoms();
+              for (const rep of modelReps) await rep.redraw();
             }
             dispatch(addMolecule(mol as any));
             modelMolRef.current = mol;
@@ -790,12 +796,15 @@ export function InspectDrawer({
               /* non-fatal: bare-atom pose */
             }
           }
-          await pmol.addRepresentation("CBs", "/*/*");
+          const poseRep = await pmol.addRepresentation(
+            "CBs",
+            bondsCidFor("CBs", hideHydrogensRef.current)
+          );
+          // Re-perceive with the dict + redraw THIS rep (not fetchIfDirtyAndDraw
+          // — see the model-load note: it would duplicate the rep and re-show H).
           pmol.setAtomsDirty(true);
-          await pmol.fetchIfDirtyAndDraw("CBs");
-          if (hideHydrogensRef.current) {
-            await pmol.hideCid(HYDROGEN_CID, true).catch(() => {});
-          }
+          await pmol.updateAtoms();
+          await poseRep.redraw();
           dispatch(addMolecule(pmol as any));
           poseMolRef.current = pmol;
         }
@@ -994,12 +1003,13 @@ export function InspectDrawer({
           // Colour the whole pose by the source hue BEFORE drawing so the
           // representation picks the rule up (Moorhen "molecule" colour rule).
           pmol.addColourRule("molecule", "//*", hex, ["//*", hex]);
-          await pmol.addRepresentation("CBs", "/*/*");
+          const pinnedRep = await pmol.addRepresentation(
+            "CBs",
+            bondsCidFor("CBs", hideHydrogensRef.current)
+          );
           pmol.setAtomsDirty(true);
-          await pmol.fetchIfDirtyAndDraw("CBs");
-          if (hideHydrogensRef.current) {
-            await pmol.hideCid(HYDROGEN_CID, true).catch(() => {});
-          }
+          await pmol.updateAtoms();
+          await pinnedRep.redraw();
           dispatch(addMolecule(pmol as any));
           molNos.push(pmol.molNo);
         } catch (err) {
@@ -1225,8 +1235,13 @@ export function InspectDrawer({
           },
           true
         );
+        // Redraw the model's OWN reps after the merge (updateAtoms + per-rep
+        // redraw) rather than fetchIfDirtyAndDraw — the latter would add a
+        // duplicate full-atom rep and re-show the hydrogens we hid (see
+        // loadEvent). Preserves the [!H] selection + the ribbons/ligands split.
         model.setAtomsDirty(true);
-        await model.fetchIfDirtyAndDraw("CBs");
+        await model.updateAtoms();
+        for (const rep of model.representations) await rep.redraw();
         await clearPose();
         // Persist the merged model (merge=true -> pose_merged + auto-Hit).
         // Deliberately does NOT advance: merging the ligand is mid-workflow —
@@ -1266,22 +1281,24 @@ export function InspectDrawer({
   );
 
   // Toggle hydrogen visibility across EVERY molecule in view — the protein
-  // model, the focal pose, and any pinned sibling poses (non-destructive:
-  // hideCid / unhideAll, so Save keeps the H). Iterates the store's molecule
-  // list so it covers all of them uniformly; deps [] (reads the ref). Fresh
-  // molecules adopt the preference at load via hideHydrogensRef.
+  // model, the focal pose, and any pinned sibling poses. Re-skins each atom/bond
+  // representation in place by swapping its CID to the H-aware selection and
+  // redrawing (redraw rebuilds buffers from rep.cid). Ribbons (CRs) draw no
+  // atoms, so they're left alone. Non-destructive (coords untouched; Save keeps
+  // the H); deps [] (reads the ref).
   const onToggleHydrogens = useCallback(() => {
     const next = !hideHydrogensRef.current;
     setHideHydrogens(next);
     const mols: MoorhenMoleculeLike[] =
       (store.getState() as any).molecules.moleculeList ?? [];
     for (const m of mols) {
-      (next
-        ? m.hideCid(HYDROGEN_CID, true)
-        : m.unhideAll(true)
-      ).catch(() => {
-        /* non-fatal: cosmetic display preference */
-      });
+      for (const rep of m.representations) {
+        if (rep.style !== "CBs" && rep.style !== "ligands") continue;
+        rep.cid = bondsCidFor(rep.style, next);
+        void rep.redraw().catch(() => {
+          /* non-fatal: cosmetic display preference */
+        });
+      }
     }
   }, []);
 
