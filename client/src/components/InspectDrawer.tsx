@@ -29,6 +29,8 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CancelIcon from "@mui/icons-material/Cancel";
+import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import BuildCircleIcon from "@mui/icons-material/BuildCircle";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
@@ -1187,6 +1189,9 @@ export function InspectDrawer({
         await model.fetchIfDirtyAndDraw("CBs");
         await clearPose();
         // Persist the merged model (merge=true -> pose_merged + auto-Hit).
+        // Deliberately does NOT advance: merging the ligand is mid-workflow —
+        // you then edit/refine the protein WITH the ligand present (so it senses
+        // the ligand's steric context). Advancing is the SAVE action's job.
         await commitLiveModel(ev, true);
       } catch {
         /* surfaced via the merging flag clearing; non-fatal */
@@ -1206,6 +1211,11 @@ export function InspectDrawer({
       setMerging(true);
       try {
         await commitLiveModel(ev, false);
+        // Save is the "done with this event" action — commit the (merged +
+        // edited/refined) model, then step to the next event without an extra
+        // click. Via the ref since goAdjacent is defined below this handler;
+        // advances from THIS event and no-ops at the end of the list.
+        goAdjacentRef.current(1);
       } catch {
         /* non-fatal */
       } finally {
@@ -1326,6 +1336,10 @@ export function InspectDrawer({
     },
     [eventOrder, selected, loadEvent]
   );
+  // Live mirror so handlers defined ABOVE (saveModel) can advance after they
+  // finish, without a forward reference to goAdjacent in their dep arrays.
+  const goAdjacentRef = useRef(goAdjacent);
+  goAdjacentRef.current = goAdjacent;
 
   return (
     <Box
@@ -1485,6 +1499,14 @@ export function InspectDrawer({
                       const nHits = g.events.filter(
                         (e) => e.decision === "hit"
                       ).length;
+                      // How many events here have a human decision (any of
+                      // hit/no_hit/ambiguous) vs are still unreviewed — so while
+                      // scanning sites you can see which still need analysing.
+                      // A "built"/"hit" badge alone made a partly-done site look
+                      // fully analysed (Erin's feedback); this corrects it.
+                      const nReviewed = g.events.filter(
+                        (e) => e.decision !== "unreviewed"
+                      ).length;
                       const built = isAutobuilt(g.events);
                       const candidate = !built && hasCandidatePose(g.events);
                       const topQ = bestQuality(g.events);
@@ -1499,6 +1521,27 @@ export function InspectDrawer({
                               }`}
                             />
                           </Tooltip>
+                          {nEvents > 0 && (
+                            <Tooltip
+                              title={
+                                nReviewed < nEvents
+                                  ? `${nEvents - nReviewed} event${
+                                      nEvents - nReviewed === 1 ? "" : "s"
+                                    } still to analyse`
+                                  : "All events analysed"
+                              }
+                              arrow
+                            >
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={
+                                  nReviewed < nEvents ? "warning" : "success"
+                                }
+                                label={`${nReviewed}/${nEvents} analysed`}
+                              />
+                            </Tooltip>
+                          )}
                           {built && (
                             <Tooltip
                               title={
@@ -1713,14 +1756,25 @@ export function InspectDrawer({
                               isLive ? "warning" : decisionColour(ev.decision)
                             }
                             icon={
+                              // Icon = DECISION status first, so no_hit and
+                              // ambiguous are legible (they previously shared the
+                              // generic view icon → looked unreviewed). Build
+                              // status is still conveyed by the chip border (sx
+                              // below), so we don't need the build icon once a
+                              // decision exists. Order: loading > decision >
+                              // build (undecided) > unreviewed.
                               loadingId === ev.id ? (
                                 <CircularProgress size={14} />
                               ) : ev.decision === "hit" ? (
                                 <CheckCircleIcon />
+                              ) : ev.decision === "no_hit" ? (
+                                <CancelIcon />
+                              ) : ev.decision === "ambiguous" ? (
+                                <HelpOutlineIcon />
                               ) : poseState !== "none" ? (
-                                // A built/candidate ligand backs this event —
-                                // flag it with the build icon (solid for
-                                // merged, outlined-tint for candidate via sx).
+                                // Undecided but a built/candidate ligand backs
+                                // it — flag with the build icon (solid=merged,
+                                // dashed-tint=candidate via sx).
                                 <BuildCircleIcon />
                               ) : (
                                 <ViewInArIcon />
