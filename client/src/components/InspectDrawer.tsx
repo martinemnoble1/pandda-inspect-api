@@ -42,6 +42,8 @@ import {
   recentre,
   setActiveMap,
   setContourLevel,
+  setMapColours,
+  setRequestDrawScene,
   showMap,
   type MoorhenMapLike,
   type MoorhenMoleculeLike,
@@ -103,6 +105,16 @@ const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
 const MAP_SIGMA_MAX = 5;
 const DIFF_SIGMA_MAX = 8;
+
+// Map colours PINNED BY ROLE (rgb 0–255), re-asserted on every event load so the
+// current event always reads the same colours. This overrides Coot/Moorhen's
+// hue-rotating wheel (MoorhenMap.setDefaultColour, +10°/map), which otherwise
+// drifts as we churn maps across switches — the "colours kept changing between
+// datasets" complaint. Event map = teal (its own identity); 2Fo-Fc = Moorhen's
+// canonical blue (the familiar default). Fo-Fc keeps the fixed ±green/red
+// difference default — NOT pinned here. See the map-state refactor doc, PR A2.
+const EVENT_MAP_COLOUR = { r: 32, g: 178, b: 170 }; // teal (LightSeaGreen)
+const MODEL_2FOFC_COLOUR = { r: 77, g: 77, b: 179 }; // Moorhen's default blue
 
 // A map currently loaded in the viewer, with the UI state to contour + toggle
 // it. ``map`` is the live MoorhenMap. The slider works in this map's native
@@ -214,6 +226,25 @@ export function InspectDrawer({
     poseMolRef.current = null; // molecules just bulk-deleted above
     modelMolRef.current = null;
   }, [dispatch, clearMaps]);
+
+  // Pin a NON-difference map's colour by role (rgb 0–255) and recolour it now.
+  // The setMapColours dispatch is the durable part — getMapContourParams reads
+  // that slice in preference to Coot's colour wheel, so every subsequent redraw
+  // (incl. the MapManager mount effect) honours it. fetchColourAndRedraw +
+  // setRequestDrawScene force the recolour immediately, mirroring Moorhen's own
+  // MapColourSelector. Errors are swallowed — colour is cosmetic, never fatal.
+  const pinMapColour = useCallback(
+    (map: MoorhenMapLike, rgb: { r: number; g: number; b: number }) => {
+      dispatch(setMapColours({ molNo: map.molNo, rgb }));
+      map
+        .fetchColourAndRedraw()
+        .then(() => dispatch(setRequestDrawScene()))
+        .catch(() => {
+          /* non-fatal: a difference map would reject; callers skip those */
+        });
+    },
+    [dispatch]
+  );
 
   const loadEvent = useCallback(
     async (ev: PanddaEvent) => {
@@ -361,6 +392,9 @@ export function InspectDrawer({
           // Set the level via Redux — MoorhenMapManager re-contours off the
           // `contourLevels` slice, NOT off map.contourLevel (see shim note).
           dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
+          // Pin the event map's colour (teal) so it's identical every event —
+          // overrides Coot's drifting colour wheel (PR A2).
+          pinMapColour(map, EVENT_MAP_COLOUR);
           loaded.push({
             map,
             molNo: map.molNo,
@@ -398,6 +432,10 @@ export function InspectDrawer({
           dispatch(
             setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
           );
+          // Pin the 2Fo-Fc map to Moorhen's canonical blue. The Fo-Fc difference
+          // map keeps its fixed ±green/red default — fetchColourAndRedraw rejects
+          // for diff maps anyway, so only pin the non-diff one (PR A2).
+          if (!isDiff) pinMapColour(mmap, MODEL_2FOFC_COLOUR);
           loaded.push({
             map: mmap,
             molNo: mmap.molNo,
@@ -579,6 +617,7 @@ export function InspectDrawer({
       clearLoaded,
       clearMaps,
       clearPose,
+      pinMapColour,
     ]
   );
   loadEventRef.current = loadEvent;

@@ -18,6 +18,8 @@ import {
   setOrigin as _setOrigin,
   setZoom as _setZoom,
   setContourLevel as _setContourLevel,
+  setMapColours as _setMapColours,
+  setRequestDrawScene as _setRequestDrawScene,
   showMap as _showMap,
   hideMap as _hideMap,
 } from "moorhen";
@@ -102,6 +104,11 @@ export interface MoorhenMapLike {
     options?: RequestInit
   ): Promise<unknown>;
   drawMapContour(): Promise<unknown>;
+  // Recolour a NON-difference map from the mapContourSettings.mapColours slice
+  // (set via setMapColours) and redraw it. Mirrors Moorhen's MapColourSelector.
+  // REJECTS on a difference map (those use the positive/negative diff variants),
+  // so callers must only invoke it for non-diff maps.
+  fetchColourAndRedraw(): Promise<void>;
   delete(): Promise<unknown>;
 }
 
@@ -170,6 +177,28 @@ export const setContourLevel = _setContourLevel as (payload: {
   molNo: number;
   contourLevel: number;
 }) => { type: string; payload: unknown };
+
+/**
+ * Pin a NON-difference map's colour by molNo (rgb 0–255). Coot/Moorhen otherwise
+ * colours each new map from a hue-rotating wheel (MoorhenMap.setDefaultColour,
+ * +10°/map), which drifts as we churn maps across event switches. This slice is
+ * read IN PREFERENCE to that default by MoorhenMap.getMapContourParams, so
+ * dispatching it pins the colour and overrides the wheel. Pair with
+ * `map.fetchColourAndRedraw()` then `setRequestDrawScene()` to recolour
+ * immediately — same sequence as Moorhen's own MapColourSelector. (Difference
+ * maps keep their fixed ±green/red default; do NOT pin them here.) See the
+ * map-state refactor doc, PR A2.
+ */
+export const setMapColours = _setMapColours as (payload: {
+  molNo: number;
+  rgb: { r: number; g: number; b: number };
+}) => { type: string; payload: unknown };
+
+// Ask Moorhen to redraw the GL scene (it toggles a switch the renderer watches;
+// the boolean payload is ignored). Dispatch after a colour change.
+export const setRequestDrawScene = _setRequestDrawScene as (
+  payload?: boolean
+) => { type: string; payload: unknown };
 
 // Map visibility is Redux-driven too (mapContourSettings.visibleMaps;
 // MoorhenMapManager shows/hides reactively off it). Pass the MAP object.
