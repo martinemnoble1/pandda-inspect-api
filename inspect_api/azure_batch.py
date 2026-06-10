@@ -62,9 +62,20 @@ def log_pointer(endpoint: str, job_id: str, task_id: str) -> str:
     return f"{base}/jobs/{job_id}/tasks/{task_id}/files/stdout.txt"
 
 
-# cell_volume_class -> --local_cpus. Large cells need lots of RAM per worker, so
-# cap workers HARD regardless of core count (a PanDDA2 worker is memory-hungry).
-_CPUS_BY_CELL_CLASS = {"large": 2, "huge": 1}
+# cell_volume_class -> how to derive --local_cpus from the node's vCPU count.
+# Large/huge cells are RAM-hungry per PanDDA2 worker, so we leave headroom
+# rather than using every core — but PROPORTIONAL to node size, not a fixed
+# floor. (Before the autobuild memory fix these were hard-capped at 2/1
+# regardless of core count, to survive the phantom-ligand-as-whole-complex
+# blow-up — fix 922f7027. With that ingestion fix on-branch and
+# PANDDA_LOCAL_AUTOBUILD=1 bounding per-conformer peak memory, the per-worker
+# footprint is well within budget — an 8-CPU local run on CDK4/CyclinD1 ran
+# clean, and 14/16 on Standard_E16ds_v4 is comfortable.) AZURE_BATCH_LOCAL_CPUS
+# stays as the operator escape hatch.
+_CPUS_BY_CELL_CLASS = {
+    "large": lambda vcpus: vcpus - 2,
+    "huge": lambda vcpus: vcpus // 2,
+}
 
 
 def _vcpus_from_vm_size(vm_size: str):
@@ -78,15 +89,19 @@ def _vcpus_from_vm_size(vm_size: str):
 
 
 def _pick_cpus(sizing_hint: dict, vm_size: str = None):
-    """Default --local_cpus for the Batch node. Large/huge cells get a hard
-    memory cap; otherwise use the node's vCPU count (so a 16-core box isn't left
-    at PanDDA2's default of 6). None ⇒ omit the flag (PanDDA2's own default).
-    NB: derive from the POOL's vm_size, never os.cpu_count() — the runner runs
-    in the Container App, a different machine from the Batch node."""
-    cls = (sizing_hint or {}).get("cell_volume_class")
-    if cls in _CPUS_BY_CELL_CLASS:
-        return _CPUS_BY_CELL_CLASS[cls]
-    return _vcpus_from_vm_size(vm_size)
+    """Default --local_cpus for the Batch node. Large/huge cells leave RAM
+    headroom (vcpus-2 / vcpus//2); other classes use the node's full vCPU count
+    (so a 16-core box isn't left at PanDDA2's default of 6). None ⇒ omit the
+    flag (PanDDA2's own default) — including when vm_size can't be parsed, so a
+    headroom class with an unknown node falls back to PanDDA2's default rather
+    than a guess. NB: derive from the POOL's vm_size, never os.cpu_count() —
+    the runner runs in the Container App, a different machine from the node."""
+    vcpus = _vcpus_from_vm_size(vm_size)
+    reducer = _CPUS_BY_CELL_CLASS.get((sizing_hint or {}).get(
+        "cell_volume_class"))
+    if reducer is not None and vcpus is not None:
+        return max(1, reducer(vcpus))
+    return vcpus
 
 
 def normalise_task_state(task) -> dict:

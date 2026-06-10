@@ -266,8 +266,20 @@ class LocalCpusTest(TestCase):
         self.assertIsNone(ab._vcpus_from_vm_size(None))
 
     def test_pick_cpus_mapping(self):
-        self.assertEqual(ab._pick_cpus({"cell_volume_class": "large"}), 2)
-        self.assertEqual(ab._pick_cpus({"cell_volume_class": "huge"}), 1)
+        # Large/huge leave RAM headroom proportional to the node: vcpus-2 and
+        # vcpus//2 on a 16-core box.
+        self.assertEqual(
+            ab._pick_cpus({"cell_volume_class": "large"},
+                          "Standard_E16ds_v4"), 14)
+        self.assertEqual(
+            ab._pick_cpus({"cell_volume_class": "huge"},
+                          "Standard_E16ds_v4"), 8)
+        # Headroom never drops below one worker on a tiny node.
+        self.assertEqual(
+            ab._pick_cpus({"cell_volume_class": "large"},
+                          "Standard_E2ds_v4"), 1)
+        # Headroom class with an unparseable node → omit (PanDDA2 default).
+        self.assertIsNone(ab._pick_cpus({"cell_volume_class": "large"}))
         # Unmapped class falls through to the VM's vCPU count.
         self.assertEqual(
             ab._pick_cpus({"cell_volume_class": "small"},
@@ -289,10 +301,10 @@ class LocalCpusTest(TestCase):
         cmd = self._cmd({}, pool=_container_pool(vm_size="Standard_E16ds_v4"))
         self.assertIn("--local_cpus 16", cmd)  # not PanDDA2's default of 6
 
-    def test_large_caps_even_on_big_node(self):
+    def test_large_leaves_headroom_on_big_node(self):
         cmd = self._cmd({"cell_volume_class": "large"},
                         pool=_container_pool(vm_size="Standard_E16ds_v4"))
-        self.assertIn("--local_cpus 2", cmd)  # memory cap beats core count
+        self.assertIn("--local_cpus 14", cmd)  # vcpus-2, not all 16
 
     def test_no_pool_info_omits_flag(self):
         self.assertNotIn("--local_cpus", self._cmd({}))
