@@ -49,6 +49,18 @@ export interface MoorhenMoleculeLike {
   addRepresentation(style: string, cid: string): Promise<unknown>;
   delete(): Promise<unknown>;
   addDict(dict: string): Promise<unknown>;
+  // Add a colour rule. For a single WHOLE-MOLECULE colour (used to tint a
+  // pinned sibling's pose by its source hue, A5): ruleType "molecule", cid
+  // "//*", a hex colour, args ["//*", hex]. Call BEFORE addRepresentation so the
+  // representation draws with it. Verified against Moorhen 0.23
+  // MoorhenMolecule.addColourRule + ModifyColourRulesCard's "molecule" case.
+  addColourRule(
+    ruleType: string,
+    cid: string,
+    color: string,
+    args: (string | number)[],
+    isMultiColourRule?: boolean
+  ): void;
   // After addDict, Coot must RE-PERCEIVE bonds so aromatic/double orders from
   // the dictionary are drawn (addDict alone doesn't redraw). Mark atoms dirty
   // then re-fetch+draw — the proven 0.23 sequence. Without this the ligand

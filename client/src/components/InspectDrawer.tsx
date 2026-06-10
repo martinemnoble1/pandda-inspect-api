@@ -33,6 +33,8 @@ import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
+import CloseIcon from "@mui/icons-material/Close";
 import HomeIcon from "@mui/icons-material/Home";
 import store from "../store";
 import {
@@ -117,6 +119,43 @@ const DIFF_SIGMA_MAX = 8;
 const EVENT_MAP_COLOUR = { r: 32, g: 178, b: 170 }; // teal (LightSeaGreen)
 const MODEL_2FOFC_COLOUR = { r: 77, g: 77, b: 179 }; // Moorhen's default blue
 
+// Pinned sibling objects (A5) are coloured by a per-source rotating hue so
+// multiple comparison sources stay mutually distinguishable — the colour wheel
+// re-homed for the FOREIGN tier (the focal event keeps its fixed role colours).
+// Golden-angle stepping spreads hues maximally; the base starts away from the
+// focal teal(~175°)/blue(~240°) so foreign objects never read as focal ones.
+const FOREIGN_HUE_BASE = 20; // warm start (orange-ish), clear of teal/blue
+const GOLDEN_ANGLE = 137.508;
+const foreignHue = (index: number): number =>
+  (FOREIGN_HUE_BASE + GOLDEN_ANGLE * index) % 360;
+
+// HSV→RGB (0–255) at a fixed saturation/value for vivid, distinguishable
+// foreign colours. h in degrees.
+const hueToRgb = (h: number): { r: number; g: number; b: number } => {
+  const s = 0.7;
+  const v = 0.95;
+  const c = v * s;
+  const hp = ((((h % 360) + 360) % 360) / 60);
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = v - c;
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
+  };
+};
+const rgbToHex = ({ r, g, b }: { r: number; g: number; b: number }): string =>
+  "#" + [r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("");
+
 // A map currently loaded in the viewer, with the UI state to contour + toggle
 // it. ``map`` is the live MoorhenMap. The slider works in this map's native
 // ``unit``: event maps in ABSOLUTE map units (their box-RMSD is tiny/unusable),
@@ -142,6 +181,18 @@ interface LoadedMap {
 // re-toggle maps off / re-tune contour every dataset" feedback. Session-scoped
 // (a ref, not persisted) by design; localStorage is a later add-on. See PR A3.
 type MapPref = { sliderValue: number; visible: boolean };
+
+// A pinned sibling observation (same Finding, a DIFFERENT run) overlaid for
+// comparison (A5). Same crystal ⇒ same coordinate frame ⇒ its objects overlay
+// the focal event directly, no superposition. Each source gets its own hue so
+// multiple are mutually distinguishable, and its objects PERSIST across event
+// navigation until dismissed — so clearMaps/clearLoaded must SKIP `molNos`.
+interface PinnedSource {
+  eventId: number; // the sibling event (one pin per event)
+  label: string; // run label for the legend (run_group / dtag)
+  hue: number; // degrees — the swatch + the colour applied to its objects
+  molNos: number[]; // every map + molecule molNo we created for this source
+}
 
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
@@ -193,6 +244,15 @@ export function InspectDrawer({
   // user's tuning carries across event/dataset switches (A3). Session-scoped ref
   // — survives switches while the drawer is open; not persisted across reloads.
   const mapPrefsRef = useRef<Record<string, MapPref>>({});
+  // Pinned sibling observations overlaid for cross-run comparison (A5). They
+  // persist across navigation until dismissed; pinnedMolNosRef is the set of all
+  // their map+molecule molNos so the focal teardown (clearMaps/clearLoaded) can
+  // skip them. The ref mirrors `pinned` for synchronous reads inside clear*.
+  const [pinned, setPinned] = useState<PinnedSource[]>([]);
+  const pinnedMolNosRef = useRef<Set<number>>(new Set());
+  // Monotonic pin counter → hue index, so unpinning then re-pinning never
+  // recycles a colour already on screen (A5).
+  const pinSeqRef = useRef(0);
   // Refinement is CRYSTAL-scoped (acts on the dataset's current_model vs its
   // MTZ; legacy pandda.inspect + DESIGN §1.2). refineAvail gates the action on
   // the CCP4 probe. Jobs are tracked PER DATASET (not per selected event) so a
@@ -235,6 +295,8 @@ export function InspectDrawer({
   const clearMaps = useCallback(async () => {
     const storeMaps: any[] = (store.getState() as any).maps ?? [];
     for (const mp of storeMaps) {
+      // Keep pinned sibling maps — they outlive the focal event (A5).
+      if (pinnedMolNosRef.current.has(mp.molNo)) continue;
       await mp.delete();
       dispatch(removeMap(mp));
     }
@@ -257,10 +319,12 @@ export function InspectDrawer({
     const molecules: any[] =
       (store.getState() as any).molecules.moleculeList ?? [];
     for (const m of molecules) {
+      // Keep pinned sibling molecules — they outlive the focal event (A5).
+      if (pinnedMolNosRef.current.has(m.molNo)) continue;
       await m.delete();
       dispatch(removeMolecule(m));
     }
-    poseMolRef.current = null; // molecules just bulk-deleted above
+    poseMolRef.current = null; // focal molecules just bulk-deleted above
     modelMolRef.current = null;
   }, [dispatch, clearMaps]);
 
@@ -758,6 +822,170 @@ export function InspectDrawer({
       if (m) onContour(molNo, m.defaultValue);
     },
     [maps, onContour]
+  );
+
+  // Pin a sibling observation (same Finding, a DIFFERENT run) for comparison
+  // (A5): load its event map + ligand pose, tint both by a per-source hue, and
+  // register their molNos so the focal teardown skips them — they persist until
+  // dismissed. STAYS PUT (no recentre): same crystal frame, so it overlays the
+  // pocket you're already looking at. Idempotent per event.
+  const pinSibling = useCallback(
+    async (ev: PanddaEvent) => {
+      if (pinned.some((p) => p.eventId === ev.id)) return;
+      const hue = foreignHue(pinSeqRef.current);
+      pinSeqRef.current += 1;
+      const rgb = hueToRgb(hue);
+      const hex = rgbToHex(rgb);
+      const runTag =
+        ev.run_group ?? (ev.run_id != null ? `run ${ev.run_id}` : "run");
+      const molNos: number[] = [];
+      let evMapMolNo: number | null = null;
+      let evMapLevel = DEFAULT_EVENT_LEVEL;
+
+      // Event map (the density to compare) — coloured by the source hue.
+      const emap = artifactOf(ev, "event_map");
+      if (emap) {
+        try {
+          const map = newMap(commandCentre, store);
+          const isCcp4 = /\.(ccp4|map|mrc)$/i.test(emap.relpath);
+          if (isCcp4) {
+            await map.loadToCootFromMapURL(
+              api.artifactUrl(emap),
+              `${ev.dtag}-EVENT@${runTag}`,
+              false,
+              false,
+              { headers: api.authHeaders() }
+            );
+          } else {
+            await map.loadToCootFromMtzURL(
+              api.artifactUrl(emap),
+              `${ev.dtag}-EVENT@${runTag}`,
+              { F: "FEVENT", PHI: "PHEVENT", useWeight: false, isDifference: false },
+              { headers: api.authHeaders() }
+            );
+          }
+          map.isEM = false;
+          map.isOriginLocked = false;
+          evMapLevel =
+            typeof map.suggestedContourLevel === "number" &&
+            map.suggestedContourLevel > 0
+              ? map.suggestedContourLevel
+              : ev.optimal_contour != null && ev.optimal_contour > 0
+              ? (ev.optimal_contour as number)
+              : DEFAULT_EVENT_LEVEL;
+          dispatch(addMap(map as any));
+          dispatch(
+            setContourLevel({ molNo: map.molNo, contourLevel: evMapLevel })
+          );
+          pinMapColour(map, rgb);
+          evMapMolNo = map.molNo;
+          molNos.push(map.molNo);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Pin: event map load failed for ${ev.dtag}@${runTag}`,
+            err
+          );
+        }
+      }
+
+      // Ligand pose (the build to compare) — tinted whole-molecule to the hue.
+      const pose = artifactOf(ev, "ligand_pose");
+      if (pose) {
+        try {
+          const pmol = newMolecule(commandCentre, store);
+          await pmol.loadToCootFromURL(
+            api.artifactUrl(pose),
+            `${ev.dtag}-pose@${runTag}`,
+            { headers: api.authHeaders() }
+          );
+          const lig = artifactOf(ev, "ligand");
+          if (lig) {
+            try {
+              const cif = await fetch(api.artifactUrl(lig), {
+                headers: api.authHeaders(),
+              }).then((r) => (r.ok ? r.text() : ""));
+              if (cif) await pmol.addDict(cif);
+            } catch {
+              /* non-fatal: bare-atom pose */
+            }
+          }
+          // Colour the whole pose by the source hue BEFORE drawing so the
+          // representation picks the rule up (Moorhen "molecule" colour rule).
+          pmol.addColourRule("molecule", "//*", hex, ["//*", hex]);
+          await pmol.addRepresentation("CBs", "/*/*");
+          pmol.setAtomsDirty(true);
+          await pmol.fetchIfDirtyAndDraw("CBs");
+          dispatch(addMolecule(pmol as any));
+          molNos.push(pmol.molNo);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Pin: pose load failed for ${ev.dtag}@${runTag}`,
+            err
+          );
+        }
+      }
+
+      if (molNos.length === 0) return; // nothing loaded — don't add an empty pin
+      molNos.forEach((n) => pinnedMolNosRef.current.add(n));
+      setPinned((prev) => [
+        ...prev,
+        { eventId: ev.id, label: `${runTag} · ${ev.dtag}`, hue, molNos },
+      ]);
+      // Re-assert the pinned event map's contour AFTER its MoorhenMap mount
+      // effect runs (which would otherwise clobber it to Moorhen's default —
+      // same race the focal load defeats with a macrotask).
+      if (evMapMolNo != null) {
+        const molNo = evMapMolNo;
+        const level = evMapLevel;
+        setTimeout(
+          () => dispatch(setContourLevel({ molNo, contourLevel: level })),
+          0
+        );
+      }
+    },
+    [pinned, commandCentre, dispatch, pinMapColour]
+  );
+
+  // Sibling observations of the selected event's Finding (same binding site,
+  // OTHER runs) — the compare-set A5 can pin. Same crystal frame, so they
+  // overlay directly. Computed from the already-loaded datasets (no extra
+  // fetch); empty when the event has no finding or no cross-run siblings.
+  const siblings = useMemo<PanddaEvent[]>(() => {
+    if (!selected || selected.finding == null) return [];
+    const out: PanddaEvent[] = [];
+    for (const ds of datasets) {
+      for (const e of ds.events) {
+        if (e.finding === selected.finding && e.id !== selected.id) {
+          out.push(e);
+        }
+      }
+    }
+    return out;
+  }, [datasets, selected]);
+
+  // Dismiss a pinned source: delete its maps + molecules and deregister it (A5).
+  const unpinSibling = useCallback(
+    async (eventId: number) => {
+      const src = pinned.find((p) => p.eventId === eventId);
+      if (!src) return;
+      const molSet = new Set(src.molNos);
+      const state = store.getState() as any;
+      for (const mp of (state.maps ?? []) as any[]) {
+        if (!molSet.has(mp.molNo)) continue;
+        await mp.delete();
+        dispatch(removeMap(mp));
+      }
+      for (const m of (state.molecules.moleculeList ?? []) as any[]) {
+        if (!molSet.has(m.molNo)) continue;
+        await m.delete();
+        dispatch(removeMolecule(m));
+      }
+      src.molNos.forEach((n) => pinnedMolNosRef.current.delete(n));
+      setPinned((prev) => prev.filter((p) => p.eventId !== eventId));
+    },
+    [pinned, dispatch]
   );
 
   const setDecision = useCallback(
@@ -1679,6 +1907,94 @@ export function InspectDrawer({
                 );
               })
             )}
+
+            {/* COMPARE RUNS (A5): overlay this binding site as seen by OTHER
+                runs. Pinned sources persist across navigation (each in its own
+                hue) until dismissed; available siblings can be pinned. Only
+                shown when the event has a Finding with cross-run siblings or
+                something is already pinned. */}
+            {selected.finding != null &&
+              (siblings.length > 0 || pinned.length > 0) && (
+                <Box sx={{ mt: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Compare runs at this site
+                  </Typography>
+                  {pinned.map((p) => (
+                    <Stack
+                      key={p.eventId}
+                      direction="row"
+                      spacing={1}
+                      alignItems="center"
+                    >
+                      <Box
+                        sx={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: "50%",
+                          bgcolor: rgbToHex(hueToRgb(p.hue)),
+                          flexShrink: 0,
+                        }}
+                      />
+                      <Typography
+                        variant="caption"
+                        noWrap
+                        sx={{ flex: 1 }}
+                        title={p.label}
+                      >
+                        {p.label}
+                      </Typography>
+                      <Tooltip title="Remove overlay" arrow>
+                        <IconButton
+                          size="small"
+                          sx={{ p: 0.25 }}
+                          onClick={() => unpinSibling(p.eventId)}
+                        >
+                          <CloseIcon fontSize="inherit" />
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+                  ))}
+                  {siblings
+                    .filter(
+                      (s) => !pinned.some((p) => p.eventId === s.id)
+                    )
+                    .map((s) => (
+                      <Stack
+                        key={s.id}
+                        direction="row"
+                        spacing={1}
+                        alignItems="center"
+                      >
+                        <Box sx={{ width: 10, height: 10, flexShrink: 0 }} />
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          noWrap
+                          sx={{ flex: 1 }}
+                        >
+                          {s.run_group ??
+                            (s.run_id != null ? `run ${s.run_id}` : "run")}{" "}
+                          · {s.dtag}
+                          {s.decision && s.decision !== "unreviewed"
+                            ? ` · ${s.decision}`
+                            : ""}
+                        </Typography>
+                        <Tooltip
+                          title="Overlay this run's event map + pose"
+                          arrow
+                        >
+                          <IconButton
+                            size="small"
+                            sx={{ p: 0.25 }}
+                            onClick={() => pinSibling(s)}
+                          >
+                            <PushPinOutlinedIcon fontSize="inherit" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    ))}
+                </Box>
+              )}
 
             <ToggleButtonGroup
               size="small"
