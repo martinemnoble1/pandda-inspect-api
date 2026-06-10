@@ -461,12 +461,18 @@ export function InspectDrawer({
         }
         setMaps(loaded);
 
-        // Make a map the ACTIVE (refinement-target) map, so a merged ligand can
-        // be refined in Moorhen without manually picking the target map first
-        // (Coot's set_imol_refinement_map, via MoorhenMap.setActive). Prefer the
-        // model-based 2Fo-Fc map when a refinement exists (current_sf present) —
-        // that's the map you refine the whole-crystal model against; otherwise
-        // fall back to the event map.
+        // Make a map the ACTIVE map = Moorhen's CLIENT-SIDE interactive
+        // refinement target (Coot's set_imol_refinement_map, via
+        // MoorhenMap.setActive) AND the scroll-wheel contour target. This is NOT
+        // centre-tracking — recentring is dispatch(setOrigin(...)), a separate
+        // concern (see CLAUDE.md); conflating active-map with centre-follow (via
+        // the MapScrollWheelListener crash below) is what previously left this
+        // unset/deferred. Default to the EVENT map of the current event: the
+        // BDC-corrected event map is the CORRECT target for fitting/refining a
+        // PanDDA ligand into bound-state density, and scroll-to-contour then acts
+        // on it too. Fall back to 2Fo-Fc only when there's no event map.
+        // Refining protein geometry against 2Fo-Fc stays a manual, deliberate
+        // active-map switch — not the default for the ligand-fitting task.
         //
         // GUARDED (this is why fb17bf4 dropped inline setActiveMap): activating a
         // map mounts MapScrollWheelListener, which reads map.mapCentre[0] on
@@ -476,8 +482,8 @@ export function InspectDrawer({
         // rather than risk the crash — refinement just needs a manual target
         // pick in that (rare) case, no worse than before.
         const activeTarget =
-          loaded.find((m) => m.label === "2Fo-Fc") ??
-          loaded.find((m) => m.label === "Event");
+          loaded.find((m) => m.label === "Event") ??
+          loaded.find((m) => m.label === "2Fo-Fc");
         if (activeTarget) {
           try {
             await activeTarget.map.fetchMapCentre();
