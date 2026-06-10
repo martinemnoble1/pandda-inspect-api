@@ -67,6 +67,12 @@ export interface MoorhenMoleculeLike {
   // renders all-single-bonds even with a correct dict.
   setAtomsDirty(state: boolean): void;
   fetchIfDirtyAndDraw(style: string): Promise<unknown>;
+  // Hide a CID selection from the bond display WITHOUT deleting atoms (Coot
+  // add_to_non_drawn_bonds) — reversible via unhideAll (clear_non_drawn_bonds).
+  // Used to hide hydrogens (`/*/*/*/[H]:*`) for easier editing while leaving the
+  // coordinates intact, so Save still exports them. Non-destructive (D).
+  hideCid(cid: string, redraw?: boolean): Promise<void>;
+  unhideAll(redraw?: boolean): Promise<void>;
   // Export the molecule's current coordinates as a string (PDB by default) —
   // used to persist a Coot-merged model back through the API (the build
   // action: merge in Coot, land the bytes server-side).

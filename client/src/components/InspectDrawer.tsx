@@ -13,11 +13,13 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  FormControlLabel,
   IconButton,
   Link,
   MenuItem,
   Slider,
   Stack,
+  Switch,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -103,6 +105,12 @@ const EVENT_LEVEL_MAX = 6.0; // absolute slider ceiling for event maps
 // single binding pocket. ~0.35 focuses on the event without clipping its
 // surroundings.
 const EVENT_ZOOM = 0.35;
+// CID selecting all hydrogen atoms (the complement of Moorhen's own `[!H]`
+// exclusion). Hidden via Coot's non-drawn-bonds (mol.hideCid) so the protein is
+// lighter to edit/drag — non-destructively: the atoms stay in the molecule, so
+// Save still exports them and unhideAll brings them back (D, hide-hydrogens
+// toggle). NB most PanDDA models carry no H, so this is a no-op for them.
+const HYDROGEN_CID = "/*/*/*/[H]:*";
 // Model-based maps stay in σ (their RMSD is meaningful — full-cell X-ray maps).
 const DEFAULT_2FOFC_SIGMA = 1.5;
 const DEFAULT_FOFC_SIGMA = 3.0;
@@ -270,6 +278,13 @@ export function InspectDrawer({
   // dataset) — the merge target + what we export to persist a build.
   const modelMolRef = useRef<MoorhenMoleculeLike | null>(null);
   const [merging, setMerging] = useState(false);
+  // Hide hydrogens on the protein model for easier editing/dragging — default
+  // ON, with a toggle (the preference is split; D). Non-destructive (hideCid),
+  // so Save keeps the H. A ref mirrors it so loadEvent reads the CURRENT value
+  // at model-load time without being re-created on every toggle.
+  const [hideHydrogens, setHideHydrogens] = useState(true);
+  const hideHydrogensRef = useRef(hideHydrogens);
+  hideHydrogensRef.current = hideHydrogens;
   // Live mirrors of selection + loadEvent so a detached background poll (a
   // refinement landing later, after you've navigated away) reads CURRENT
   // values, not the stale closure from when it was submitted.
@@ -424,6 +439,14 @@ export function InspectDrawer({
             if (dictLoaded) {
               mol.setAtomsDirty(true);
               await mol.fetchIfDirtyAndDraw("CBs");
+            }
+            // Hide H on the freshly-loaded model if the toggle is on (default).
+            // Read the REF so a fresh model adopts the current preference. No-op
+            // when the model has no hydrogens.
+            if (hideHydrogensRef.current) {
+              await mol.hideCid(HYDROGEN_CID, true).catch(() => {
+                /* non-fatal: cosmetic display preference */
+              });
             }
             dispatch(addMolecule(mol as any));
             modelMolRef.current = mol;
@@ -748,6 +771,9 @@ export function InspectDrawer({
           await pmol.addRepresentation("CBs", "/*/*");
           pmol.setAtomsDirty(true);
           await pmol.fetchIfDirtyAndDraw("CBs");
+          if (hideHydrogensRef.current) {
+            await pmol.hideCid(HYDROGEN_CID, true).catch(() => {});
+          }
           dispatch(addMolecule(pmol as any));
           poseMolRef.current = pmol;
         }
@@ -929,6 +955,9 @@ export function InspectDrawer({
           await pmol.addRepresentation("CBs", "/*/*");
           pmol.setAtomsDirty(true);
           await pmol.fetchIfDirtyAndDraw("CBs");
+          if (hideHydrogensRef.current) {
+            await pmol.hideCid(HYDROGEN_CID, true).catch(() => {});
+          }
           dispatch(addMolecule(pmol as any));
           molNos.push(pmol.molNo);
         } catch (err) {
@@ -1185,6 +1214,26 @@ export function InspectDrawer({
     },
     [commitLiveModel]
   );
+
+  // Toggle hydrogen visibility across EVERY molecule in view — the protein
+  // model, the focal pose, and any pinned sibling poses (non-destructive:
+  // hideCid / unhideAll, so Save keeps the H). Iterates the store's molecule
+  // list so it covers all of them uniformly; deps [] (reads the ref). Fresh
+  // molecules adopt the preference at load via hideHydrogensRef.
+  const onToggleHydrogens = useCallback(() => {
+    const next = !hideHydrogensRef.current;
+    setHideHydrogens(next);
+    const mols: MoorhenMoleculeLike[] =
+      (store.getState() as any).molecules.moleculeList ?? [];
+    for (const m of mols) {
+      (next
+        ? m.hideCid(HYDROGEN_CID, true)
+        : m.unhideAll(true)
+      ).catch(() => {
+        /* non-fatal: cosmetic display preference */
+      });
+    }
+  }, []);
 
   // The dataset whose event is currently live in Moorhen — its ligand sketch
   // is the one worth showing (detail tied to "what am I looking at").
@@ -2024,6 +2073,33 @@ export function InspectDrawer({
               </ToggleButton>
               <ToggleButton value="ambiguous">Ambiguous</ToggleButton>
             </ToggleButtonGroup>
+
+            {/* Hide hydrogens on the model for easier editing/dragging — a
+                display toggle (default on). Non-destructive: H stay in the
+                molecule, so Save keeps them and toggling shows them again. */}
+            <Tooltip
+              arrow
+              title={
+                "Hide hydrogen atoms while editing (display only — they stay " +
+                "in the model and are saved)"
+              }
+            >
+              <FormControlLabel
+                sx={{ ml: 0, mt: 0.5 }}
+                control={
+                  <Switch
+                    size="small"
+                    checked={hideHydrogens}
+                    onChange={onToggleHydrogens}
+                  />
+                }
+                label={
+                  <Typography variant="caption" color="text.secondary">
+                    Hide hydrogens
+                  </Typography>
+                }
+              />
+            </Tooltip>
 
             {/* BUILD/SAVE actions, sharing one row when both apply: a candidate
                 pose (not yet merged) gets the Merge button alongside Save;
