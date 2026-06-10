@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { addMap, addMolecule, removeMap, removeMolecule } from "moorhen";
 import type { moorhen } from "moorhen/types/moorhen";
 import {
@@ -157,6 +157,27 @@ export function InspectDrawer({
   cootInitialized,
 }: Props) {
   const dispatch = useDispatch();
+  // Redux is the LIVE source of truth for map contour/visibility/active state —
+  // MoorhenMapManager and Moorhen's OWN map controls write here. Subscribe so our
+  // per-map control rows REFLECT changes made via Moorhen's native tools, not just
+  // our own ("mini toggles didn't show changes made with the map tools" + "don't
+  // show which map is active" feedback). contourLevel is ABSOLUTE; visibleMaps is
+  // molNo[]; activeMap is the scroll-wheel / refinement-target map (A4). Selecting
+  // the primitive molNo (not the map object) keeps the selector referentially
+  // stable. NB this only DISPLAYS external changes; persistence (A3) still tracks
+  // our own controls — a contour set via Moorhen's native slider isn't remembered.
+  const liveContourLevels = useSelector(
+    (s: { mapContourSettings: { contourLevels: { molNo: number; contourLevel: number }[] } }) =>
+      s.mapContourSettings.contourLevels
+  );
+  const liveVisibleMaps = useSelector(
+    (s: { mapContourSettings: { visibleMaps: number[] } }) =>
+      s.mapContourSettings.visibleMaps
+  );
+  const activeMapMolNo = useSelector(
+    (s: { generalStates: { activeMap: { molNo: number } | null } }) =>
+      s.generalStates.activeMap?.molNo ?? null
+  );
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [axis, setAxis] = useState<GroupAxis>("dataset");
   const [sort, setSort] = useState<SortKey>("dtag");
@@ -706,11 +727,13 @@ export function InspectDrawer({
   // Toggle a map's visibility (Redux-driven; MoorhenMapManager shows/hides off
   // the visibleMaps slice). Lets the user declutter a dense 3-map view.
   const onToggleVisible = useCallback(
-    (molNo: number) => {
+    // `visible` is the DESIRED new state — the caller derives it from the LIVE
+    // Redux visibility (A4), not local state, so our toggle stays correct even
+    // after the map was shown/hidden via Moorhen's own controls.
+    (molNo: number, visible: boolean) => {
       setMaps((prev) =>
         prev.map((m) => {
           if (m.molNo !== molNo) return m;
-          const visible = !m.visible;
           dispatch(visible ? showMap(m.map) : hideMap(m.map));
           // Remember this role's visibility so it carries across switches (A3).
           mapPrefsRef.current[m.label] = {
@@ -1553,70 +1576,108 @@ export function InspectDrawer({
                 No maps loaded.
               </Typography>
             ) : (
-              maps.map((m) => (
-                <Stack
-                  key={m.molNo}
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                >
-                  <Tooltip title={m.visible ? "Hide map" : "Show map"} arrow>
-                    <IconButton
-                      size="small"
-                      sx={{ p: 0.25 }}
-                      onClick={() => onToggleVisible(m.molNo)}
-                    >
-                      {m.visible ? (
-                        <VisibilityIcon fontSize="inherit" />
-                      ) : (
-                        <VisibilityOffIcon fontSize="inherit" />
-                      )}
-                    </IconButton>
-                  </Tooltip>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ width: 96, flexShrink: 0 }}
+              maps.map((m) => {
+                // Display state from REDUX (reflects changes made via Moorhen's
+                // own map tools), falling back to local state before the slices
+                // populate. contourLevel is absolute → convert to the row's unit
+                // for σ maps. Visibility + active badge are Redux too (A4).
+                const liveAbs = liveContourLevels.find(
+                  (c) => c.molNo === m.molNo
+                )?.contourLevel;
+                const rmsd = m.map.mapRmsd;
+                const displayValue =
+                  liveAbs == null
+                    ? m.sliderValue
+                    : m.unit === "sigma" &&
+                      typeof rmsd === "number" &&
+                      rmsd > 0
+                    ? liveAbs / rmsd
+                    : liveAbs;
+                const isVisible = liveVisibleMaps.includes(m.molNo);
+                const isActive = activeMapMolNo === m.molNo;
+                return (
+                  <Stack
+                    key={m.molNo}
+                    direction="row"
+                    spacing={1}
+                    alignItems="center"
                   >
-                    {m.label} {m.sliderValue.toFixed(2)}
-                    {m.unit === "sigma" ? "σ" : ""}
-                  </Typography>
-                  <Slider
-                    size="small"
-                    min={0}
-                    max={
-                      m.unit === "absolute"
-                        ? EVENT_LEVEL_MAX
-                        : m.isDifference
-                        ? DIFF_SIGMA_MAX
-                        : MAP_SIGMA_MAX
-                    }
-                    step={0.05}
-                    value={m.sliderValue}
-                    disabled={!m.visible}
-                    onChange={(_, v) =>
-                      onContour(m.molNo, Array.isArray(v) ? v[0] : v)
-                    }
-                    sx={{ flex: 1 }}
-                  />
-                  <Tooltip title="Reset contour to default" arrow>
-                    <span>
+                    {isActive ? (
+                      <Tooltip
+                        title="Active map (scroll-wheel + refine target)"
+                        arrow
+                      >
+                        <Box
+                          sx={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            bgcolor: "primary.main",
+                            flexShrink: 0,
+                          }}
+                        />
+                      </Tooltip>
+                    ) : (
+                      <Box sx={{ width: 8, height: 8, flexShrink: 0 }} />
+                    )}
+                    <Tooltip title={isVisible ? "Hide map" : "Show map"} arrow>
                       <IconButton
                         size="small"
                         sx={{ p: 0.25 }}
-                        disabled={
-                          !m.visible ||
-                          Math.abs(m.sliderValue - m.defaultValue) < 1e-3
-                        }
-                        onClick={() => onResetContour(m.molNo)}
+                        onClick={() => onToggleVisible(m.molNo, !isVisible)}
                       >
-                        <RestartAltIcon fontSize="inherit" />
+                        {isVisible ? (
+                          <VisibilityIcon fontSize="inherit" />
+                        ) : (
+                          <VisibilityOffIcon fontSize="inherit" />
+                        )}
                       </IconButton>
-                    </span>
-                  </Tooltip>
-                </Stack>
-              ))
+                    </Tooltip>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ width: 96, flexShrink: 0 }}
+                    >
+                      {m.label} {displayValue.toFixed(2)}
+                      {m.unit === "sigma" ? "σ" : ""}
+                    </Typography>
+                    <Slider
+                      size="small"
+                      min={0}
+                      max={
+                        m.unit === "absolute"
+                          ? EVENT_LEVEL_MAX
+                          : m.isDifference
+                          ? DIFF_SIGMA_MAX
+                          : MAP_SIGMA_MAX
+                      }
+                      step={0.05}
+                      value={displayValue}
+                      disabled={!isVisible}
+                      onChange={(_, v) =>
+                        onContour(m.molNo, Array.isArray(v) ? v[0] : v)
+                      }
+                      sx={{ flex: 1 }}
+                    />
+                    <Tooltip title="Reset contour to default" arrow>
+                      <span>
+                        <IconButton
+                          size="small"
+                          sx={{ p: 0.25 }}
+                          disabled={
+                            !isVisible ||
+                            Math.abs(displayValue - m.defaultValue) < 1e-3
+                          }
+                          onClick={() => onResetContour(m.molNo)}
+                        >
+                          <RestartAltIcon fontSize="inherit" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Stack>
+                );
+              })
             )}
 
             <ToggleButtonGroup
