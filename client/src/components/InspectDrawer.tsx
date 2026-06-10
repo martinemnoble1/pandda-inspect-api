@@ -32,6 +32,7 @@ import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import HomeIcon from "@mui/icons-material/Home";
 import store from "../store";
 import {
@@ -127,9 +128,20 @@ interface LoadedMap {
   label: string;
   unit: "sigma" | "absolute";
   sliderValue: number; // contour in this map's `unit`
+  // The seeded default for this map's contour (in `unit`) — what the per-map
+  // "reset" button restores. Distinct from sliderValue, which may carry a
+  // remembered/user-tuned value (A3).
+  defaultValue: number;
   isDifference: boolean;
   visible: boolean;
 }
+
+// Remembered per-map UI prefs, keyed by map ROLE (label), so they survive event/
+// dataset switches even though each load mints a new molNo. Seeded maps adopt the
+// remembered contour + visibility instead of the hardcoded default — the "had to
+// re-toggle maps off / re-tune contour every dataset" feedback. Session-scoped
+// (a ref, not persisted) by design; localStorage is a later add-on. See PR A3.
+type MapPref = { sliderValue: number; visible: boolean };
 
 const artifactOf = (ev: PanddaEvent, kind: string): Artifact | undefined =>
   ev.artifacts.find((a) => a.kind === kind);
@@ -156,6 +168,10 @@ export function InspectDrawer({
   // All maps loaded for the live event (event map + model-based 2Fo-Fc/Fo-Fc),
   // each with its own contour + visibility — drives the per-map control rows.
   const [maps, setMaps] = useState<LoadedMap[]>([]);
+  // Remembered per-ROLE map prefs (contour + visibility), keyed by label, so a
+  // user's tuning carries across event/dataset switches (A3). Session-scoped ref
+  // — survives switches while the drawer is open; not persisted across reloads.
+  const mapPrefsRef = useRef<Record<string, MapPref>>({});
   // Refinement is CRYSTAL-scoped (acts on the dataset's current_model vs its
   // MTZ; legacy pandda.inspect + DESIGN §1.2). refineAvail gates the action on
   // the CCP4 probe. Jobs are tracked PER DATASET (not per selected event) so a
@@ -242,6 +258,34 @@ export function InspectDrawer({
         .catch(() => {
           /* non-fatal: a difference map would reject; callers skip those */
         });
+    },
+    [dispatch]
+  );
+
+  // Apply a freshly-loaded map's contour + visibility: the REMEMBERED prefs for
+  // its role (label) if any, else the seeded default. Dispatches the contour
+  // (Coot wants ABSOLUTE — σ maps multiply by RMSD) and hides the map if the
+  // remembered pref says so. Returns the effective slider value + visibility (in
+  // the map's unit) for the LoadedMap row. Keyed by label so a user's tuning
+  // survives event/dataset switches (A3).
+  const seedMapState = useCallback(
+    (
+      map: MoorhenMapLike,
+      label: string,
+      unit: "sigma" | "absolute",
+      defaultSlider: number
+    ): { sliderValue: number; visible: boolean } => {
+      const pref = mapPrefsRef.current[label];
+      const sliderValue = pref ? pref.sliderValue : defaultSlider;
+      const visible = pref ? pref.visible : true;
+      const rmsd = map.mapRmsd;
+      const level =
+        unit === "sigma" && typeof rmsd === "number" && rmsd > 0
+          ? sliderValue * rmsd
+          : sliderValue;
+      dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
+      if (!visible) dispatch(hideMap(map));
+      return { sliderValue, visible };
     },
     [dispatch]
   );
@@ -389,9 +433,11 @@ export function InspectDrawer({
           // MapScrollWheelListener, which reads mapCentre[0] unconditionally and
           // crashes the render tree. Activation happens once, after setMaps,
           // guarded by fetchMapCentre() — see the activation block below.
-          // Set the level via Redux — MoorhenMapManager re-contours off the
-          // `contourLevels` slice, NOT off map.contourLevel (see shim note).
-          dispatch(setContourLevel({ molNo: map.molNo, contourLevel: level }));
+          // Apply contour + visibility via Redux — the REMEMBERED pref for the
+          // "Event" role if any, else this seeded default (`level`).
+          // MoorhenMapManager re-contours off the `contourLevels` slice, NOT off
+          // map.contourLevel (see shim note).
+          const eventSeed = seedMapState(map, "Event", "absolute", level);
           // Pin the event map's colour (teal) so it's identical every event —
           // overrides Coot's drifting colour wheel (PR A2).
           pinMapColour(map, EVENT_MAP_COLOUR);
@@ -400,9 +446,10 @@ export function InspectDrawer({
             molNo: map.molNo,
             label: "Event",
             unit: "absolute",
-            sliderValue: level,
+            sliderValue: eventSeed.sliderValue,
+            defaultValue: level,
+            visible: eventSeed.visible,
             isDifference: false,
-            visible: true,
           });
         }
 
@@ -424,14 +471,11 @@ export function InspectDrawer({
         // register it with the store, sharing the path for both column sources.
         const stageModelMap = (mmap: MoorhenMapLike, isDiff: boolean) => {
           const msigma = isDiff ? DEFAULT_FOFC_SIGMA : DEFAULT_2FOFC_SIGMA;
-          const mlevel =
-            typeof mmap.mapRmsd === "number" && mmap.mapRmsd > 0
-              ? msigma * mmap.mapRmsd
-              : msigma;
+          const label = isDiff ? "Fo-Fc" : "2Fo-Fc";
           dispatch(addMap(mmap as any));
-          dispatch(
-            setContourLevel({ molNo: mmap.molNo, contourLevel: mlevel })
-          );
+          // Apply contour + visibility (remembered pref for this role else the
+          // seeded σ default) — seedMapState handles the σ→absolute conversion.
+          const seed = seedMapState(mmap, label, "sigma", msigma);
           // Pin the 2Fo-Fc map to Moorhen's canonical blue. The Fo-Fc difference
           // map keeps its fixed ±green/red default — fetchColourAndRedraw rejects
           // for diff maps anyway, so only pin the non-diff one (PR A2).
@@ -439,11 +483,12 @@ export function InspectDrawer({
           loaded.push({
             map: mmap,
             molNo: mmap.molNo,
-            label: isDiff ? "Fo-Fc" : "2Fo-Fc",
+            label,
             unit: "sigma",
-            sliderValue: msigma,
+            sliderValue: seed.sliderValue,
+            defaultValue: msigma,
             isDifference: isDiff,
-            visible: true,
+            visible: seed.visible,
           });
         };
         if (sf && sf.map_columns?.length) {
@@ -553,7 +598,9 @@ export function InspectDrawer({
         // strictly after React flushes that mount effect, so re-dispatching here
         // wins. (Levels are absolute; mirror onContour's unit handling.)
         const desired = loaded.map((m) => ({
+          map: m.map,
           molNo: m.molNo,
+          visible: m.visible,
           level:
             m.unit === "sigma" &&
             typeof m.map.mapRmsd === "number" &&
@@ -566,6 +613,9 @@ export function InspectDrawer({
             dispatch(
               setContourLevel({ molNo: d.molNo, contourLevel: d.level })
             );
+            // Re-assert visibility too (A3): a remembered "hidden" pref must win
+            // over the mount effect, which re-adds maps visible by default.
+            dispatch(d.visible ? showMap(d.map) : hideMap(d.map));
           }
         }, 0);
 
@@ -618,6 +668,7 @@ export function InspectDrawer({
       clearMaps,
       clearPose,
       pinMapColour,
+      seedMapState,
     ]
   );
   loadEventRef.current = loadEvent;
@@ -635,6 +686,13 @@ export function InspectDrawer({
         )
       );
       const m = maps.find((x) => x.molNo === molNo);
+      // Remember the tuned contour for this role so it carries across switches.
+      if (m) {
+        mapPrefsRef.current[m.label] = {
+          sliderValue: value,
+          visible: m.visible,
+        };
+      }
       const rmsd = m?.map.mapRmsd;
       const level =
         m?.unit === "sigma" && typeof rmsd === "number" && rmsd > 0
@@ -654,11 +712,29 @@ export function InspectDrawer({
           if (m.molNo !== molNo) return m;
           const visible = !m.visible;
           dispatch(visible ? showMap(m.map) : hideMap(m.map));
+          // Remember this role's visibility so it carries across switches (A3).
+          mapPrefsRef.current[m.label] = {
+            sliderValue: m.sliderValue,
+            visible,
+          };
           return { ...m, visible };
         })
       );
     },
     [dispatch]
+  );
+
+  // Reset ONE map's contour to its seeded default (the crystallographer's "reset
+  // to default for sigma contouring" ask). Manual + per-map BY DESIGN: contour is
+  // a persisted, user-tuned axis (A3), so unlike the automatic per-navigation
+  // colour reset, the way back to the seed is an explicit button. Routes through
+  // onContour so it also updates the remembered pref.
+  const onResetContour = useCallback(
+    (molNo: number) => {
+      const m = maps.find((x) => x.molNo === molNo);
+      if (m) onContour(molNo, m.defaultValue);
+    },
+    [maps, onContour]
   );
 
   const setDecision = useCallback(
@@ -1524,6 +1600,21 @@ export function InspectDrawer({
                     }
                     sx={{ flex: 1 }}
                   />
+                  <Tooltip title="Reset contour to default" arrow>
+                    <span>
+                      <IconButton
+                        size="small"
+                        sx={{ p: 0.25 }}
+                        disabled={
+                          !m.visible ||
+                          Math.abs(m.sliderValue - m.defaultValue) < 1e-3
+                        }
+                        onClick={() => onResetContour(m.molNo)}
+                      >
+                        <RestartAltIcon fontSize="inherit" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </Stack>
               ))
             )}
