@@ -1160,6 +1160,9 @@ export function InspectDrawer({
         await model.fetchIfDirtyAndDraw("CBs");
         await clearPose();
         // Persist the merged model (merge=true -> pose_merged + auto-Hit).
+        // Deliberately does NOT advance: merging the ligand is mid-workflow —
+        // you then edit/refine the protein WITH the ligand present (so it senses
+        // the ligand's steric context). Advancing is the SAVE action's job.
         await commitLiveModel(ev, true);
       } catch {
         /* surfaced via the merging flag clearing; non-fatal */
@@ -1179,6 +1182,11 @@ export function InspectDrawer({
       setMerging(true);
       try {
         await commitLiveModel(ev, false);
+        // Save is the "done with this event" action — commit the (merged +
+        // edited/refined) model, then step to the next event without an extra
+        // click. Via the ref since goAdjacent is defined below this handler;
+        // advances from THIS event and no-ops at the end of the list.
+        goAdjacentRef.current(1);
       } catch {
         /* non-fatal */
       } finally {
@@ -1279,6 +1287,10 @@ export function InspectDrawer({
     },
     [eventOrder, selected, loadEvent]
   );
+  // Live mirror so handlers defined ABOVE (saveModel) can advance after they
+  // finish, without a forward reference to goAdjacent in their dep arrays.
+  const goAdjacentRef = useRef(goAdjacent);
+  goAdjacentRef.current = goAdjacent;
 
   return (
     <Box
