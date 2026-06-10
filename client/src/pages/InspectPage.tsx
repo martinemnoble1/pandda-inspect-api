@@ -10,7 +10,7 @@ import {
 import type { MoorhenPanel } from "moorhen";
 import type { webGL } from "moorhen/types/mgWebGL";
 import type { moorhen } from "moorhen/types/moorhen";
-import store from "../store";
+import store, { resetMoorhenStore } from "../store";
 import { api, type Project } from "../api";
 import { InspectDrawer } from "../components/InspectDrawer";
 
@@ -66,6 +66,25 @@ export function InspectPage() {
   useEffect(() => {
     if (cootInitialized) dispatch(setShownSidePanel(PANEL_ID));
   }, [cootInitialized, dispatch]);
+
+  // TEARDOWN on leaving the Moorhen page (the dashboard→moorhen→dashboard→
+  // moorhen crash). MoorhenInstanceProvider's own unmount cleanup terminates the
+  // CootWorker, but it leaves the APP-LEVEL store (a module singleton, shared
+  // with MoorhenContainer) fully populated — stale init/ready flags
+  // (cootInitialized, isGlobalInstanceReady, userPreferencesMounted) plus the
+  // previous session's maps/molecules bound to the now-dead worker. The store is
+  // never re-created, so its boot-time initial state never re-applies; the next
+  // mount renders the menu/managers against that stale state before the fresh
+  // instance has run startInstance, and crashes. Reset EVERY slice to initial so
+  // the next entry replays a clean boot (preferences reload from localForage on
+  // remount). One full reset instead of patching stale flags one at a time —
+  // see store.ts resetMoorhenStore. Runs after the children (incl. Moorhen) have
+  // already unmounted/unsubscribed, so no live subscriber sees the reset.
+  useEffect(() => {
+    return () => {
+      dispatch(resetMoorhenStore());
+    };
+  }, [dispatch]);
 
   const collectedProps = {
     glRef,
