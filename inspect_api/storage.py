@@ -36,26 +36,50 @@ class LocalFileStore:
 
     ``root`` is the project ``source_root`` (the tree it was ingested from,
     possibly an in-place PanDDA output dir anywhere on disk).
+
+    ``extra_roots`` are additional candidate trees tried, in order, when a
+    relpath is not found under ``root``. This is what lets a project that has
+    ingested MORE THAN ONE run — each in its own tree — serve every run's
+    artifacts even though ``project.source_root`` holds only the most recent
+    one (it is overwritten on each ingest). Without this, run A's artifacts
+    404 the moment run B is ingested. See get_store + the multi-run note.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, extra_roots=None):
         self.root = Path(root).resolve()
+        roots = [self.root]
+        for r in extra_roots or []:
+            if not r:
+                continue
+            rp = Path(r).resolve()
+            if rp not in roots:
+                roots.append(rp)
+        self.roots = roots
 
-    def _resolve(self, relpath: str) -> Path:
-        """Resolve ``relpath`` under root, preserving the download view's
-        deliberate guard semantics:
-
-        The traversal check is LEXICAL (os.path.normpath) and done BEFORE
-        following symlinks — so it blocks ``..`` escapes while still serving
-        PanDDA2's symlinked inputs (``<dtag>-pandda-input.pdb/.mtz`` symlink to
-        a sibling ``data/`` dir whose *target* legitimately lives outside root).
+    def _guard(self, relpath: str) -> None:
+        """LEXICAL traversal guard against the PRIMARY root, done BEFORE any
+        symlink-follow — blocks ``..`` escapes (root-independent: a ``..``
+        relpath escapes every candidate root) while still serving PanDDA2's
+        symlinked inputs (``<dtag>-pandda-input.pdb/.mtz`` symlink to a sibling
+        ``data/`` dir whose *target* legitimately lives outside root).
         Resolving symlinks before the check would 404 every input structure.
         """
-        candidate = self.root / relpath
-        lexical = Path(os.path.normpath(candidate))
+        lexical = Path(os.path.normpath(self.root / relpath))
         if not str(lexical).startswith(str(self.root) + os.sep):
             raise ValueError("path escapes store root")
-        return candidate.resolve()  # now follow symlinks to the real bytes
+
+    def _resolve(self, relpath: str) -> Path:
+        """Resolve ``relpath`` to real bytes, trying each candidate root in
+        order and returning the first where the file actually exists (symlinks
+        followed). Falls back to the primary-root path when nothing matches, so
+        a genuinely-missing file still 404s against the primary root.
+        """
+        self._guard(relpath)
+        for r in self.roots:
+            p = (r / relpath).resolve()  # follow symlinks to the real bytes
+            if p.is_file():
+                return p
+        return (self.root / relpath).resolve()
 
     def open(self, relpath: str):
         return open(self._resolve(relpath), "rb")
@@ -169,7 +193,26 @@ def get_store(project) -> DataStore:
     root = project.source_root or (
         Path(settings.PANDDA_DATA_ROOT) / project.name
     )
-    return LocalFileStore(Path(root))
+    # Multi-run fallback: every ingest run records its own tree in Run.out_dir
+    # (== that run's source_root). project.source_root holds only the LAST one,
+    # so without this a multi-run project 404s every other run's artifacts (and
+    # any built model written under an earlier run's root). Try each run tree,
+    # then the data-root, after the primary. Order is best-effort; the first
+    # existing match wins (primary first, so the current run is preferred).
+    extra_roots = []
+    try:
+        from .models import Run
+
+        extra_roots.extend(
+            Run.objects.filter(project=project)
+            .exclude(out_dir="")
+            .values_list("out_dir", flat=True)
+        )
+    except Exception:  # pragma: no cover - defensive (e.g. migrations)
+        pass
+    extra_roots.append(str(Path(settings.PANDDA_DATA_ROOT) / project.name))
+    extra_roots.append(str(settings.PANDDA_DATA_ROOT))
+    return LocalFileStore(Path(root), extra_roots=extra_roots)
 
 
 # Future: S3FileStore, CCP4CloudStore, CCP4i2Store — same protocol, selected
