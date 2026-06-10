@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Box,
   Button,
@@ -33,6 +33,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 export function ProjectDashboard() {
   const { projectId } = useParams();
   const id = Number(projectId);
+  const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
   const [reports, setReports] = useState<Artifact[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -147,7 +148,13 @@ export function ProjectDashboard() {
             label={`${s.n_refined} crystals refined`}
           />
         </Stack>
-        <SummaryCharts distributions={s.distributions} sites={s.sites} />
+        <SummaryCharts
+          distributions={s.distributions}
+          sites={s.sites}
+          onSiteClick={(siteNum) =>
+            navigate(`/projects/${id}/inspect?site=${siteNum}`)
+          }
+        />
       </Paper>
 
       {/* PanDDA runs for this project (cloud-triggered). Mirrors the Reports

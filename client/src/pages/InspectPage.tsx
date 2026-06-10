@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import {
   MoorhenContainer,
@@ -26,6 +26,11 @@ export function InspectPage() {
   const id = Number(projectId);
   const dispatch = useDispatch();
   const [project, setProject] = useState<Project | null>(null);
+  // Deep-link: `?site=N` (from clicking a site bar on the dashboard) tells the
+  // drawer to open in Site mode focused on that site.
+  const [searchParams] = useSearchParams();
+  const siteParam = searchParams.get("site");
+  const initialSite = siteParam != null ? Number(siteParam) : null;
 
   const cootInitialized = useSelector(
     (s: any) => s.generalStates.cootInitialized
@@ -56,11 +61,12 @@ export function InspectPage() {
             glRef={glRef}
             commandCentre={commandCentre}
             cootInitialized={!!cootInitialized}
+            initialSite={initialSite}
           />
         ),
       },
     }),
-    [project?.name, id, cootInitialized]
+    [project?.name, id, cootInitialized, initialSite]
   );
 
   useEffect(() => {
