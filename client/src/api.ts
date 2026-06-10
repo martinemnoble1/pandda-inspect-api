@@ -15,6 +15,8 @@ export interface SiteSummary {
   site_num: number;
   n_events: number;
   n_hits: number;
+  n_no_hit: number;
+  n_ambiguous: number;
 }
 // Raw (unbinned) distribution values backing the dashboard's native charts —
 // a live modernisation of PanDDA1's pandda_analyse.html graphs. The client

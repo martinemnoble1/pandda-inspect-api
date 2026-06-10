@@ -90,21 +90,41 @@ export function SummaryCharts({
   distributions: Distributions;
   sites: SiteSummary[];
 }) {
-  // Events-per-site bar (replaces PanDDA1's analyse_events_site_N pies); hits
-  // overlaid as a second series so curation progress reads off the same axis.
+  // Events-per-site, STACKED by decision (replaces PanDDA1's
+  // analyse_events_site_N pies). One bar per site whose total height is the
+  // event count, segmented into hit / no-hit / ambiguous / unreviewed — so
+  // curation progress AND the decision mix read off the same axis, and no-hit /
+  // ambiguous are visible (they weren't on the old Events+Hits overlay). Colours
+  // mirror the event-chip decision semantics. Unreviewed = events minus decided.
   const siteData = useMemo(
     () => ({
       labels: sites.map((s) => `Site ${s.site_num}`),
       datasets: [
         {
-          label: "Events",
-          data: sites.map((s) => s.n_events),
-          backgroundColor: "#90caf9",
-        },
-        {
           label: "Hits",
           data: sites.map((s) => s.n_hits),
           backgroundColor: "#66bb6a",
+          stack: "decisions",
+        },
+        {
+          label: "No-hit",
+          data: sites.map((s) => s.n_no_hit),
+          backgroundColor: "#ef5350",
+          stack: "decisions",
+        },
+        {
+          label: "Ambiguous",
+          data: sites.map((s) => s.n_ambiguous),
+          backgroundColor: "#ffb74d",
+          stack: "decisions",
+        },
+        {
+          label: "Unreviewed",
+          data: sites.map((s) =>
+            Math.max(0, s.n_events - s.n_hits - s.n_no_hit - s.n_ambiguous)
+          ),
+          backgroundColor: "#e0e0e0",
+          stack: "decisions",
         },
       ],
     }),
@@ -152,6 +172,14 @@ export function SummaryCharts({
               options={{
                 ...CHART_OPTS,
                 plugins: { legend: { display: true } },
+                scales: {
+                  x: { stacked: true },
+                  y: {
+                    stacked: true,
+                    beginAtZero: true,
+                    ticks: { precision: 0 },
+                  },
+                },
               }}
             />
           </Box>

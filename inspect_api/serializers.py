@@ -360,6 +360,12 @@ class ProjectSerializer(serializers.ModelSerializer):
                 "n_hits": se.filter(
                     finding__decision=Event.Decision.HIT
                 ).count(),
+                "n_no_hit": se.filter(
+                    finding__decision=Event.Decision.NO_HIT
+                ).count(),
+                "n_ambiguous": se.filter(
+                    finding__decision=Event.Decision.AMBIGUOUS
+                ).count(),
             })
         return {
             "analysed": n_events > 0,
