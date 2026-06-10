@@ -455,6 +455,12 @@ export function InspectDrawer({
 
         const emap = artifactOf(ev, "event_map");
         if (emap) {
+          // GUARDED: an event map can be legitimately ABSENT — a PanDDA run
+          // that produced no BDC event map for this dataset leaves the artifact
+          // pointing at a file that 404s. Don't let that throw an unhandled
+          // rejection that aborts the whole event load (Erin's "no data → app
+          // crashes"); skip the map and carry on with the model maps + pose.
+          try {
           const map = newMap(commandCentre, store);
           // PanDDA2 emits event maps as CCP4 real-space maps; PanDDA1 emitted
           // them as MTZ reflection files (with FEVENT/PHEVENT columns). Branch
@@ -536,6 +542,13 @@ export function InspectDrawer({
             visible: eventSeed.visible,
             isDifference: false,
           });
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `Event map unavailable for ${ev.dtag}; skipping.`,
+              err
+            );
+          }
         }
 
         // Model-based maps from current_sf (dimple MTZ at first, refined
