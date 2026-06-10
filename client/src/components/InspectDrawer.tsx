@@ -27,6 +27,8 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CancelIcon from "@mui/icons-material/Cancel";
+import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import BuildCircleIcon from "@mui/icons-material/BuildCircle";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
@@ -1693,14 +1695,25 @@ export function InspectDrawer({
                               isLive ? "warning" : decisionColour(ev.decision)
                             }
                             icon={
+                              // Icon = DECISION status first, so no_hit and
+                              // ambiguous are legible (they previously shared the
+                              // generic view icon → looked unreviewed). Build
+                              // status is still conveyed by the chip border (sx
+                              // below), so we don't need the build icon once a
+                              // decision exists. Order: loading > decision >
+                              // build (undecided) > unreviewed.
                               loadingId === ev.id ? (
                                 <CircularProgress size={14} />
                               ) : ev.decision === "hit" ? (
                                 <CheckCircleIcon />
+                              ) : ev.decision === "no_hit" ? (
+                                <CancelIcon />
+                              ) : ev.decision === "ambiguous" ? (
+                                <HelpOutlineIcon />
                               ) : poseState !== "none" ? (
-                                // A built/candidate ligand backs this event —
-                                // flag it with the build icon (solid for
-                                // merged, outlined-tint for candidate via sx).
+                                // Undecided but a built/candidate ligand backs
+                                // it — flag with the build icon (solid=merged,
+                                // dashed-tint=candidate via sx).
                                 <BuildCircleIcon />
                               ) : (
                                 <ViewInArIcon />
