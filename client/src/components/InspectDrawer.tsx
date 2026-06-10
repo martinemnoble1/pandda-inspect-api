@@ -1436,6 +1436,14 @@ export function InspectDrawer({
                       const nHits = g.events.filter(
                         (e) => e.decision === "hit"
                       ).length;
+                      // How many events here have a human decision (any of
+                      // hit/no_hit/ambiguous) vs are still unreviewed — so while
+                      // scanning sites you can see which still need analysing.
+                      // A "built"/"hit" badge alone made a partly-done site look
+                      // fully analysed (Erin's feedback); this corrects it.
+                      const nReviewed = g.events.filter(
+                        (e) => e.decision !== "unreviewed"
+                      ).length;
                       const built = isAutobuilt(g.events);
                       const candidate = !built && hasCandidatePose(g.events);
                       const topQ = bestQuality(g.events);
@@ -1450,6 +1458,27 @@ export function InspectDrawer({
                               }`}
                             />
                           </Tooltip>
+                          {nEvents > 0 && (
+                            <Tooltip
+                              title={
+                                nReviewed < nEvents
+                                  ? `${nEvents - nReviewed} event${
+                                      nEvents - nReviewed === 1 ? "" : "s"
+                                    } still to analyse`
+                                  : "All events analysed"
+                              }
+                              arrow
+                            >
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={
+                                  nReviewed < nEvents ? "warning" : "success"
+                                }
+                                label={`${nReviewed}/${nEvents} analysed`}
+                              />
+                            </Tooltip>
+                          )}
                           {built && (
                             <Tooltip
                               title={
