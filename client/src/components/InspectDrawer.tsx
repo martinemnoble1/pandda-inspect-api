@@ -1801,7 +1801,18 @@ export function InspectDrawer({
                       </Box>
                     );
                     return (
-                      <Tooltip key={ev.id} title={tip} arrow placement="top">
+                      <Tooltip
+                        key={ev.id}
+                        title={tip}
+                        arrow
+                        placement="top"
+                        // Only show on a deliberate pause, so sweeping across a
+                        // dense site's chips doesn't throw up a wall of
+                        // obscuring panels (Erin's feedback). enterNextDelay
+                        // keeps the delay even when moving chip-to-chip.
+                        enterDelay={600}
+                        enterNextDelay={600}
+                      >
                         {/* span wrapper so Tooltip works on a disabled chip */}
                         <span>
                           <Chip
