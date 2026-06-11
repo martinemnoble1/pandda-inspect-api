@@ -14,7 +14,13 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from inspect_api import runservice
-from inspect_api.cleanup import CleanupError, delete_run, run_owns_outdir
+from inspect_api.cleanup import (
+    CleanupError,
+    archive_project,
+    delete_run,
+    purge_project,
+    run_owns_outdir,
+)
 from inspect_api.models import (
     Artifact, Dataset, Event, Finding, Project, Run, RunDataset,
 )
@@ -299,3 +305,159 @@ class ZombieGuardTests(TestCase):
     def test_empty_outdir_allowed(self):
         run, created = self._submit()
         self.assertTrue(created)
+
+
+class _ProjectFixtureMixin:
+    """Builds a project with one run (owned or in-place), a dataset, an
+    event-scoped artifact, and a real out_dir on disk."""
+
+    def _build_project(self, *, source_managed=False, owned_run=True,
+                       name="P"):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out_dir = tmp / "pandda_results"
+        (out_dir / "processed_datasets" / "ds1").mkdir(parents=True)
+        project = Project.objects.create(
+            name=name, source_root=str(out_dir),
+            source_managed=source_managed,
+        )
+        run = Run.objects.create(
+            project=project, group="g", share_path=str(tmp),
+            out_dir=str(out_dir), idempotency_key=f"{name}-k",
+            status=Run.Status.SUCCEEDED,
+            runner_handle=("h" if owned_run else ""),
+        )
+        ds = Dataset.objects.create(project=project, dtag="ds1")
+        rd = RunDataset.objects.create(run=run, dataset=ds)
+        ev = Event.objects.create(dataset=ds, run_dataset=rd, event_num=1)
+        map_rel = "processed_datasets/ds1/ds1-event_1_map.ccp4"
+        (out_dir / map_rel).write_text("map", encoding="utf-8")
+        Artifact.objects.create(
+            event=ev, kind=Artifact.Kind.EVENT_MAP, relpath=map_rel,
+            origin=Artifact.Origin.IMPORTED,
+        )
+        return project, out_dir, ds
+
+
+class ProjectArchivePurgeTests(_ProjectFixtureMixin, TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def _names(self, payload):
+        rows = payload.get("results", payload)
+        return [r["name"] for r in rows]
+
+    def test_archive_sets_flag_and_retains(self):
+        project, out_dir, ds = self._build_project()
+        resp = self.client.delete(f"/api/v1/projects/{project.id}/")
+        self.assertEqual(resp.status_code, 200)
+        project.refresh_from_db()
+        self.assertTrue(project.archived)
+        self.assertEqual(resp.json()["n_events"], 1)
+        self.assertTrue(out_dir.exists())  # nothing deleted on archive
+
+    def test_archived_hidden_from_list_shown_with_flag(self):
+        self._build_project(name="Active")
+        archived, _, _ = self._build_project(name="Archived")
+        archive_project(archived)
+        listed = self.client.get("/api/v1/projects/").json()
+        self.assertIn("Active", self._names(listed))
+        self.assertNotIn("Archived", self._names(listed))
+        incl = self.client.get(
+            "/api/v1/projects/?include_archived=true"
+        ).json()
+        self.assertIn("Archived", self._names(incl))
+
+    def test_unarchive_restores(self):
+        project, _, _ = self._build_project()
+        archive_project(project)
+        resp = self.client.post(
+            f"/api/v1/projects/{project.id}/unarchive/"
+        )
+        self.assertEqual(resp.status_code, 200)
+        project.refresh_from_db()
+        self.assertFalse(project.archived)
+
+    def test_purge_requires_archived(self):
+        project, out_dir, _ = self._build_project()
+        resp = self.client.post(f"/api/v1/projects/{project.id}/purge/")
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(Project.objects.filter(pk=project.id).exists())
+
+    def test_purge_db_only_keeps_files(self):
+        project, out_dir, _ = self._build_project()
+        archive_project(project)
+        resp = self.client.post(f"/api/v1/projects/{project.id}/purge/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Project.objects.filter(pk=project.id).exists())
+        self.assertTrue(out_dir.exists())  # files retained (default false)
+        self.assertEqual(resp.json()["trees_removed"], 0)
+
+    def test_purge_true_removes_owned_tree(self):
+        project, out_dir, _ = self._build_project(owned_run=True)
+        archive_project(project)
+        resp = self.client.post(
+            f"/api/v1/projects/{project.id}/purge/?delete_outdirs=true"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(out_dir.exists())
+        self.assertGreaterEqual(resp.json()["trees_removed"], 1)
+
+    def test_purge_true_keeps_inplace_tree(self):
+        # No runner_handle + not source_managed = the user's in-place tree.
+        project, out_dir, _ = self._build_project(
+            owned_run=False, source_managed=False
+        )
+        archive_project(project)
+        summary = purge_project(project, delete_outdirs=True)
+        self.assertTrue(out_dir.exists())  # user's data untouched
+        self.assertEqual(summary["trees_removed"], 0)
+
+    def test_purge_force_removes_inplace_tree(self):
+        project, out_dir, _ = self._build_project(
+            owned_run=False, source_managed=False
+        )
+        archive_project(project)
+        purge_project(project, delete_outdirs=True, force=True)
+        self.assertFalse(out_dir.exists())  # explicit nuke
+
+    def test_purge_managed_removes_source_tree(self):
+        project, out_dir, _ = self._build_project(
+            owned_run=False, source_managed=True
+        )
+        archive_project(project)
+        summary = purge_project(project, delete_outdirs=True)
+        self.assertFalse(out_dir.exists())  # source_root==out_dir, managed
+        self.assertTrue(summary["source_tree_removed"])
+
+    def test_purge_sweeps_built_under_unremoved_source_root(self):
+        # source_root != out_dir, unmanaged: the owned out_dir is removed, the
+        # source tree is NOT, but the BUILT artifact's bytes under it are swept.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        source_root = tmp / "src"
+        out_dir = tmp / "out"
+        (source_root / "builds" / "1").mkdir(parents=True)
+        out_dir.mkdir()
+        built = source_root / "builds" / "1" / "model.pdb"
+        built.write_text("pdb", encoding="utf-8")
+        project = Project.objects.create(
+            name="P", source_root=str(source_root), source_managed=False
+        )
+        run = Run.objects.create(
+            project=project, group="g", share_path=str(tmp),
+            out_dir=str(out_dir), idempotency_key="k",
+            status=Run.Status.SUCCEEDED, runner_handle="h",
+        )
+        ds = Dataset.objects.create(project=project, dtag="ds1")
+        RunDataset.objects.create(run=run, dataset=ds)
+        Artifact.objects.create(
+            dataset=ds, kind=Artifact.Kind.STRUCTURE,
+            relpath="builds/1/model.pdb", origin=Artifact.Origin.BUILT,
+        )
+        archive_project(project)
+        summary = purge_project(project, delete_outdirs=True)
+        self.assertFalse(built.exists())  # swept via store.delete
+        self.assertTrue(source_root.is_dir())  # unmanaged tree NOT removed
+        self.assertFalse(out_dir.exists())  # owned out_dir removed
+        self.assertEqual(summary["n_built_models"], 1)

@@ -1,11 +1,14 @@
 # ADR: Deletion & cleanup — projects, runs, and the files behind them
 
-- **Status:** **Proposed** (design only; nothing below is implemented yet). No
-  delete endpoint exists today — the ViewSets are `ReadOnlyModelViewSet`, and
-  the DB cascades are wired but unreachable from the API. **2026-06-11:**
-  reviewed against Materia's delete-endpoint brief — §4 records the agreed API
-  shape and five corrections.
-- **Date:** 2026-06-10 (§4 added 2026-06-11).
+- **Status:** **Implemented** on `feat/delete-cleanup-endpoints`. Chunk 1:
+  storage-seam `delete()`, `Project.source_managed`, `cleanup.delete_run`,
+  `DELETE /runs/<id>`, and the submit-side zombie guard. Chunk 2:
+  `Project.archived`, `cleanup.archive_project`/`purge_project`,
+  `DELETE /projects/<id>` (archive), `POST /projects/<id>/purge`,
+  `POST /projects/<id>/unarchive`. **2026-06-11:** reviewed against Materia's
+  delete-endpoint brief — §4 records the agreed API shape and five corrections,
+  all encoded and tested (`inspect_api/tests/test_delete_cleanup.py`).
+- **Date:** 2026-06-10 (§4 added 2026-06-11; implemented 2026-06-11).
 - **Relates to:**
   [DESIGN-artifacts-and-jobs.md](DESIGN-artifacts-and-jobs.md) (the `Artifact`
   `origin`/`relpath` model this leans on),
@@ -247,13 +250,24 @@ against the actual schema.
 ### Adopted shape
 
 ```
-DELETE /api/v1/runs/<id>?delete_outdir=<mode>
-DELETE /api/v1/projects/<id>?delete_outdirs=<mode>
+DELETE /api/v1/runs/<id>?delete_outdir=<mode>      # hard-delete the run
+DELETE /api/v1/projects/<id>                        # ARCHIVE (soft, reversible)
+POST   /api/v1/projects/<id>/unarchive/             # restore
+POST   /api/v1/projects/<id>/purge/?delete_outdirs=<mode>   # irreversible
 ```
 `<mode>` ∈ `false` (default, DB-only, returns the on-disk path), `true`
 (safe-delete with the orphan check), `force` (`rm` regardless, accept broken
 pointers). Response carries an audit summary
 (`{run_id, events_deleted, artifacts_deleted, disk_freed_bytes}`).
+
+**Project shape note (vs the brief):** the brief proposed
+`DELETE /projects/<id>?delete_outdirs=…` as a hard delete. Per Q2 (§2 / the
+Materia reply) a project DELETE instead **archives** (reversible); the
+irreversible cascade + file sweep is the explicit `POST .../purge/` step, which
+**requires the project to be archived first** (else `400`). So `delete_outdirs`
+lives on `purge`, not on the project `DELETE`. Materia's CLI therefore needs a
+separate purge command — the one piece of Materia-side coordination this split
+implies.
 
 ### Ownership predicate — `runner_handle`, confirmed
 
@@ -356,6 +370,8 @@ live Run owns*) are two halves of one DB↔disk invariant and must land together
 ---
 
 ## Summary — what to build
+
+*(All ✅ landed on `feat/delete-cleanup-endpoints`.)*
 
 1. **`DataStore.delete(relpath)`** on the storage seam (local + azure).
 2. **`Project.source_managed: bool`** (migration) — set by `/import` vs

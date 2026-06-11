@@ -23,7 +23,8 @@ from pathlib import Path
 
 from django.conf import settings
 
-from .models import Artifact, Event, Run
+from .models import Artifact, Event, Finding, Run
+from .storage import get_store
 
 # A run is settled (safe to reason about its tree) only in these states; never
 # touch the tree of a run the node may still be writing.
@@ -201,4 +202,108 @@ def delete_run(run: Run, *, delete_outdir: bool = False,
     }
     if rm_error:
         summary["out_dir_error"] = rm_error
+    return summary
+
+
+# --- Project archive / purge --------------------------------------------------
+
+def project_loss_summary(project) -> dict:
+    """Counts of what a PURGE would irreversibly destroy — the confirm summary
+    surfaced at archive AND purge time. The three reconstructible-only-by-hand
+    classes (decisions, built, refined) are called out separately."""
+    events = Event.objects.filter(dataset__project=project)
+    decided = Finding.objects.filter(dataset__project=project).exclude(
+        decision=Event.Decision.UNREVIEWED
+    )
+    return {
+        "n_runs": project.runs.count(),
+        "n_datasets": project.datasets.count(),
+        "n_events": events.count(),
+        "n_findings_with_decisions": decided.count(),
+        "n_built_models": Artifact.objects.filter(
+            dataset__project=project, origin=Artifact.Origin.BUILT
+        ).count(),
+        "n_refined_models": Artifact.objects.filter(
+            dataset__project=project, origin=Artifact.Origin.REFINED
+        ).count(),
+    }
+
+
+def archive_project(project) -> dict:
+    """Soft-delete: tombstone the project (reversible). Retains every row and
+    byte; a later purge does the irreversible work. Idempotent."""
+    if not project.archived:
+        project.archived = True
+        project.save(update_fields=["archived"])
+    return {"id": project.id, "archived": True, **project_loss_summary(project)}
+
+
+def purge_project(project, *, delete_outdirs: bool = False,
+                  force: bool = False) -> dict:
+    """Hard-delete a project (DB cascade) and, optionally, its files.
+
+    Whole-project teardown, so — unlike run-delete — there is NO per-run orphan
+    check (every artifact is going) and no current_model guard (every pointer
+    is going). Disk removal still respects ownership: with ``delete_outdirs``
+    we rm only runner-owned ``out_dir`` trees and (if ``source_managed``) the
+    copied source tree, leaving a user's in-place-ingested tree untouched.
+    ``force`` removes EVERY out_dir and the source tree regardless — an
+    explicit nuke that can reach a user's own data. (§4 correction 3 + 4.)
+    """
+    loss = project_loss_summary(project)
+    store = get_store(project)  # capture before the cascade removes the runs
+
+    trees: set[str] = set()
+    derived: list[str] = []
+    source_removed = False
+    if delete_outdirs:
+        for run in project.runs.exclude(out_dir=""):
+            if force or run_owns_outdir(run):
+                trees.add(_norm(run.out_dir))
+        if (project.source_managed or force) and project.source_root:
+            trees.add(_norm(project.source_root))
+        derived = list(
+            Artifact.objects.filter(
+                dataset__project=project,
+                origin__in=(Artifact.Origin.BUILT, Artifact.Origin.REFINED),
+            ).values_list("relpath", flat=True)
+        )
+
+    source_norm = _norm(project.source_root) if project.source_root else None
+    disk_freed = sum(_tree_size(t) for t in trees)
+    project_name = project.name
+
+    project.delete()  # DB cascade: runs, datasets, events, findings, artifacts
+
+    errors: list[str] = []
+    trees_removed = 0
+    if delete_outdirs:
+        for tree in trees:
+            ok, err = _rm_tree(tree)
+            if ok:
+                trees_removed += 1
+                if tree == source_norm:
+                    source_removed = True
+            else:
+                if err:
+                    errors.append(err)
+                disk_freed -= 0  # size already counted; rm failed → leave it
+        # Belt-and-suspenders: sweep any BUILT/REFINED bytes that lived outside
+        # a removed tree (e.g. under PANDDA_JOBS_ROOT). store paths were
+        # captured before the cascade, so this still resolves.
+        for relpath in derived:
+            try:
+                store.delete(relpath)
+            except (OSError, ValueError):
+                pass
+
+    summary = {
+        "project": project_name,
+        **loss,
+        "trees_removed": trees_removed,
+        "disk_freed_bytes": disk_freed if delete_outdirs else 0,
+        "source_tree_removed": source_removed,
+    }
+    if errors:
+        summary["errors"] = errors
     return summary

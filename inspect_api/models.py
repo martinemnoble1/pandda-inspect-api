@@ -35,6 +35,12 @@ class Project(models.Model):
     # out_dir is gated separately on Run.runner_handle. See
     # docs/DELETION_AND_CLEANUP.md §1 + §4 correction 4.
     source_managed = models.BooleanField(default=False)
+    # Soft-delete tombstone. DELETE /projects/<id> sets this (reversible undo);
+    # a separate explicit POST /projects/<id>/purge does the irreversible hard
+    # delete + file sweep. Archived projects are hidden from the default list
+    # but still resolve for detail/un-archive/serving. See
+    # docs/DELETION_AND_CLEANUP.md §2.
+    archived = models.BooleanField(default=False)
     ingested_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
