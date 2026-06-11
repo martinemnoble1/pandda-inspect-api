@@ -145,6 +145,11 @@ def import_zip(zip_path: Path, project_name: str) -> dict:
                 "ingest_pandda", project=project_name, root=str(dest)
             )
             project = Project.objects.get(name=project_name)
+            # We COPIED the tree under PANDDA_DATA_ROOT, so we own it — mark it
+            # purge-deletable (ingest_path leaves this False). See
+            # docs/DELETION_AND_CLEANUP.md §4 correction 4.
+            project.source_managed = True
+            project.save(update_fields=["source_managed"])
             return {
                 "id": project.id,
                 "flavour": flavour,
@@ -159,7 +164,7 @@ def import_zip(zip_path: Path, project_name: str) -> dict:
         crystals_root = manifest.parent
         shutil.copytree(crystals_root, dest)
         project = Project.objects.create(
-            name=project_name, source_root=str(dest)
+            name=project_name, source_root=str(dest), source_managed=True
         )
         rows = _read_manifest(dest / manifest.name)
         for row in rows:

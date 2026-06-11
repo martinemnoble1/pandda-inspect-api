@@ -111,6 +111,17 @@ wander ~20Å across runs).
 - A web client can NEVER hand the server a directory path (browser sandbox) — so
   "ingest without copy" is a CLI / Electron / register-path affordance, not a
   browser one. `source_root` is the single abstraction that expresses all three.
+- **Deletion/cleanup mirrors this ownership story** (proposed, not yet built —
+  [docs/DELETION_AND_CLEANUP.md](docs/DELETION_AND_CLEANUP.md)). The DB cascades
+  are wired; the *files* are the design. Cleanup is driven off **`Artifact.origin`**
+  (delete bytes only for `BUILT`/`REFINED` — never IMPORTED in-place trees, which
+  are the user's) plus **`Run.out_dir` provenance** for analysis output trees,
+  via a new **`DataStore.delete()`** on the seam (do NOT add an inline resolver).
+  Note the **submit-time zombie guard**: deleting a project cascades the `Run`
+  rows but leaves the `out_dir` on disk, and `runservice` does
+  `mkdir(exist_ok=True)` with DB-resident idempotency — so a fresh analysis
+  silently writes into the stale tree. The invariant: *a populated `out_dir` is
+  owned by exactly one live `Run` (or nobody)*; refuse an unowned populated dir.
 
 ## Moorhen integration — THE big lesson: Moorhen is Redux-driven
 

@@ -29,6 +29,12 @@ class DataStore(Protocol):
     # to local disk and returns that path; ``local`` returns the resolved path
     # directly. ``None`` if the ref can't be made a local file.
     def local_path(self, relpath: str): ...
+    # Remove the bytes for ONE relpath (the deletion side of the seam, used by
+    # the artifact cleanup sweep — docs/DELETION_AND_CLEANUP.md §1). Returns
+    # True if something was removed, False if nothing was there. Removing whole
+    # run output *trees* (an absolute out_dir we own) is a separate,
+    # local-filesystem concern handled in cleanup.py, NOT a relpath op here.
+    def delete(self, relpath: str) -> bool: ...
 
 
 class LocalFileStore:
@@ -90,6 +96,22 @@ class LocalFileStore:
     def local_path(self, relpath: str):
         p = self._resolve(relpath)
         return p if p.is_file() else None
+
+    def delete(self, relpath: str) -> bool:
+        """Unlink the bytes for ``relpath``. Removes the LEAF entry itself —
+        a symlink is unlinked, never its target — so deleting an IMPORTED
+        symlinked input (``-pandda-input.pdb``) can't reach into the sibling
+        ``data/`` tree. Tries each candidate root; removes the first match.
+        (The sweep only ever passes BUILT/REFINED relpaths, which are real
+        files we wrote, but the symlink-safety holds regardless.)
+        """
+        self._guard(relpath)
+        for r in self.roots:
+            candidate = r / relpath
+            if candidate.is_symlink() or candidate.is_file():
+                candidate.unlink()
+                return True
+        return False
 
 
 class AzureBlobStore:
@@ -171,6 +193,13 @@ class AzureBlobStore:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(blob.download_blob().readall())
         return dest
+
+    def delete(self, relpath: str) -> bool:
+        blob = self.container.get_blob_client(self._key(relpath))
+        if not blob.exists():
+            return False
+        blob.delete_blob()
+        return True
 
 
 def get_store(project) -> DataStore:

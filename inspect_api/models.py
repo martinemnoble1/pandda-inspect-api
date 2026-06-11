@@ -28,6 +28,13 @@ class Project(models.Model):
     # Filesystem location ingested from — the import boundary, not the source
     # of truth once ingested.
     source_root = models.CharField(max_length=1024)
+    # True when WE own the source_root tree — i.e. the zip importer COPIED it
+    # under PANDDA_DATA_ROOT/<name> (import_zip). False when the tree is the
+    # user's own, pointed at in place (ingest_path) or a triggered run's share.
+    # The gate for whether project-purge may rm source_root itself; the per-run
+    # out_dir is gated separately on Run.runner_handle. See
+    # docs/DELETION_AND_CLEANUP.md §1 + §4 correction 4.
+    source_managed = models.BooleanField(default=False)
     ingested_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

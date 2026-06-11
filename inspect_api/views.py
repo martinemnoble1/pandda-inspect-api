@@ -11,6 +11,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .buildservice import BuildError, land_built_model
+from .cleanup import CleanupError, delete_run
 from .identity import identity_from_request
 from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
@@ -461,6 +462,7 @@ class RunViewSet(
     mixins.RetrieveModelMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
     """
@@ -474,6 +476,11 @@ class RunViewSet(
       observed success, ingests the produced pandda2_out/ tree (idempotent).
     * ``GET /runs/?project=<external_id>&group=…`` — list.
     * ``POST /runs/{id}/cancel/`` — terminate.
+    * ``DELETE /runs/{id}/?delete_outdir=false|true|force`` — hard-delete the
+      run (DB cascade) and optionally its output tree. ``false`` (default) is
+      DB-only and returns the on-disk path; ``true`` safe-deletes the tree
+      (refuses if not ours / shared / would orphan); ``force`` removes it
+      regardless. See docs/DELETION_AND_CLEANUP.md §4.
     """
 
     serializer_class = RunSerializer
@@ -547,3 +554,34 @@ class RunViewSet(
             run.completed_at = timezone.now()
             run.save(update_fields=["status", "completed_at"])
         return Response(self.get_serializer(run).data)
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(
+                description="Deleted; body is the audit summary "
+                "({run_id, events_deleted, artifacts_deleted, "
+                "disk_freed_bytes, out_dir, out_dir_removed})."
+            ),
+            400: OpenApiResponse(
+                description="Bad delete_outdir mode, or out_dir removal "
+                "refused (not Reinspect-owned / shared / would orphan)."
+            ),
+        },
+    )
+    def destroy(self, request, *args, **kwargs):
+        run = self.get_object()
+        mode = (request.query_params.get("delete_outdir") or "false").lower()
+        if mode not in ("false", "true", "force"):
+            return Response(
+                {"detail": "delete_outdir must be one of: false, true, force"},
+                status=400,
+            )
+        try:
+            summary = delete_run(
+                run,
+                delete_outdir=mode in ("true", "force"),
+                force=mode == "force",
+            )
+        except CleanupError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(summary, status=200)
