@@ -273,7 +273,9 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Project
-        fields = ["id", "name", "source_root", "ingested_at", "status"]
+        fields = [
+            "id", "name", "source_root", "archived", "ingested_at", "status",
+        ]
 
     @extend_schema_field(serializers.JSONField())
     def get_status(self, obj):

@@ -89,6 +89,10 @@ def _default_out_dir(share_path: str, group: str) -> str:
     return str(Path(share_path) / "pandda2_out")
 
 
+def _is_nonempty_dir(path: Path) -> bool:
+    return path.is_dir() and any(path.iterdir())
+
+
 # pandda2.analyse flags Reinspect OWNS — a trigger may NOT override these; every
 # OTHER well-formed pandda2.analyse flag is accepted and passed straight to the
 # command line. Reserved because they'd break the input/output contract (paths
@@ -180,6 +184,20 @@ def submit_run(
         raise RunError(
             f"output parent {out_dir.parent} does not exist — is the share "
             "mounted and share_path correct?"
+        )
+    # Zombie guard (DELETION_AND_CLEANUP.md §3): a populated out_dir that NO
+    # Run row owns is a stale tree — a prior run whose DB rows were deleted but
+    # whose files were left on disk. mkdir(exist_ok=True) would silently write
+    # fresh pandda2 output ONTO the stale tree (merge → off-by-one event/map
+    # counts), which ingest then faithfully imports. Refuse. A populated dir a
+    # Run DOES reference is legitimate reuse (retry/resume of that run).
+    if _is_nonempty_dir(out_dir) and not Run.objects.filter(
+        out_dir=str(out_dir)
+    ).exists():
+        raise RunError(
+            f"output dir {out_dir} already contains files but is owned by no "
+            "run (a stale tree from a deleted run?) — remove it or use a "
+            "different group"
         )
     out_dir.mkdir(exist_ok=True)
 

@@ -11,6 +11,12 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .buildservice import BuildError, land_built_model
+from .cleanup import (
+    CleanupError,
+    archive_project,
+    delete_run,
+    purge_project,
+)
 from .identity import identity_from_request
 from .importer import ImportError_, import_zip, ingest_path
 from .jobs import get_runner
@@ -71,9 +77,78 @@ def _is_local_request(request) -> bool:
     return request.META.get("REMOTE_ADDR") in _LOOPBACK
 
 
-class ProjectViewSet(viewsets.ReadOnlyModelViewSet):
+class ProjectViewSet(
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
+
+    def get_queryset(self):
+        # Archived projects are tombstoned: hidden from the default list but
+        # still retrievable (for the un-archive / detail / serving paths) and
+        # shown when explicitly asked via ?include_archived. See
+        # docs/DELETION_AND_CLEANUP.md §2.
+        qs = Project.objects.all()
+        include = self.request.query_params.get("include_archived")
+        if self.action == "list" and include not in ("1", "true", "yes"):
+            qs = qs.filter(archived=False)
+        return qs
+
+    def destroy(self, request, *args, **kwargs):
+        """Soft-delete: archive the project (reversible). The irreversible
+        teardown is the separate POST .../purge step."""
+        summary = archive_project(self.get_object())
+        return Response(summary, status=200)
+
+    @action(detail=True, methods=["post"])
+    def unarchive(self, request, pk=None):
+        """Restore an archived project."""
+        project = self.get_object()
+        if project.archived:
+            project.archived = False
+            project.save(update_fields=["archived"])
+        return Response(self.get_serializer(project).data)
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(
+                description="Purged; body is the audit summary."
+            ),
+            400: OpenApiResponse(
+                description="Bad delete_outdirs mode, or project is not "
+                "archived (archive before purging)."
+            ),
+        },
+    )
+    @action(detail=True, methods=["post"])
+    def purge(self, request, pk=None):
+        """Irreversibly hard-delete an ARCHIVED project (DB cascade) and,
+        per ``?delete_outdirs=false|true|force``, its files. Requires the
+        project to be archived first — the explicit second step that gates the
+        irreversible work (docs/DELETION_AND_CLEANUP.md §2/§4)."""
+        project = self.get_object()
+        if not project.archived:
+            return Response(
+                {"detail": "Archive the project before purging it "
+                 "(DELETE /projects/<id>/ first)."},
+                status=400,
+            )
+        mode = (request.query_params.get("delete_outdirs") or "false").lower()
+        if mode not in ("false", "true", "force"):
+            return Response(
+                {"detail": "delete_outdirs must be one of: false, true, "
+                 "force"},
+                status=400,
+            )
+        summary = purge_project(
+            project,
+            delete_outdirs=mode in ("true", "force"),
+            force=mode == "force",
+        )
+        return Response(summary, status=200)
 
     @action(detail=True, methods=["get"])
     def reports(self, request, pk=None):
@@ -461,6 +536,7 @@ class RunViewSet(
     mixins.RetrieveModelMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
     """
@@ -474,6 +550,11 @@ class RunViewSet(
       observed success, ingests the produced pandda2_out/ tree (idempotent).
     * ``GET /runs/?project=<external_id>&group=…`` — list.
     * ``POST /runs/{id}/cancel/`` — terminate.
+    * ``DELETE /runs/{id}/?delete_outdir=false|true|force`` — hard-delete the
+      run (DB cascade) and optionally its output tree. ``false`` (default) is
+      DB-only and returns the on-disk path; ``true`` safe-deletes the tree
+      (refuses if not ours / shared / would orphan); ``force`` removes it
+      regardless. See docs/DELETION_AND_CLEANUP.md §4.
     """
 
     serializer_class = RunSerializer
@@ -547,3 +628,34 @@ class RunViewSet(
             run.completed_at = timezone.now()
             run.save(update_fields=["status", "completed_at"])
         return Response(self.get_serializer(run).data)
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(
+                description="Deleted; body is the audit summary "
+                "({run_id, events_deleted, artifacts_deleted, "
+                "disk_freed_bytes, out_dir, out_dir_removed})."
+            ),
+            400: OpenApiResponse(
+                description="Bad delete_outdir mode, or out_dir removal "
+                "refused (not Reinspect-owned / shared / would orphan)."
+            ),
+        },
+    )
+    def destroy(self, request, *args, **kwargs):
+        run = self.get_object()
+        mode = (request.query_params.get("delete_outdir") or "false").lower()
+        if mode not in ("false", "true", "force"):
+            return Response(
+                {"detail": "delete_outdir must be one of: false, true, force"},
+                status=400,
+            )
+        try:
+            summary = delete_run(
+                run,
+                delete_outdir=mode in ("true", "force"),
+                force=mode == "force",
+            )
+        except CleanupError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(summary, status=200)
