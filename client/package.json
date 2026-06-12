@@ -6,6 +6,7 @@
   "scripts": {
     "copy:assets": "copyfiles -u 3 \"node_modules/moorhen/public/**/*\" public/ && copyfiles -u 4 \"node_modules/@rdkit/rdkit/dist/RDKit_minimal.*\" public/ && copyfiles -u 1 \"brand/*\" public/",
     "dev": "npm run copy:assets && vite",
+    "dev:fast": "node -e \"process.exit(require('fs').existsSync('public/MoorhenAssets')?0:1)\" && vite || npm run dev",
     "build": "npm run copy:assets && tsc -b && vite build",
     "preview": "vite preview"
   },
