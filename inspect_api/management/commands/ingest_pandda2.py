@@ -48,7 +48,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
-from inspect_api.conventions import detect_map_columns
+from inspect_api.conventions import detect_map_columns, normalize_ligand_comp
 from inspect_api.models import Artifact, Run
 from inspect_api.pandda2_input import is_xsym_stub, load_input_yaml
 from inspect_api.reconcile import (
@@ -490,7 +490,11 @@ class Command(BaseCommand):
         for cif in candidates:
             try:
                 if cif.is_file():
-                    return cif.read_text(encoding="utf-8")
+                    # Canonicalise the monomer code to LIG (PanDDA2's pose
+                    # convention) so the dict binds in the viewer and refmac.
+                    return normalize_ligand_comp(
+                        cif.read_text(encoding="utf-8"), dtag=dtag
+                    )
             except OSError:
                 continue
         return None
