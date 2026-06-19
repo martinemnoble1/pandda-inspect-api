@@ -12,6 +12,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "dev:electron": "PANDDA_DEV_URL=http://localhost:5173 electron .",
+    "dev": "trap 'kill 0' EXIT; python manage.py runserver 8000 & npm --prefix client run dev:fast & PANDDA_DEV_URL=http://localhost:5173 electron .",
     "dist": "electron-builder",
     "dist:dir": "electron-builder --dir"
   },

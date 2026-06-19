@@ -31,6 +31,16 @@ const fs = require("node:fs");
 let backend = null;
 let backendPort = 0;
 
+// --- dev mode ----------------------------------------------------------------
+// When PANDDA_DEV_URL is set (e.g. http://localhost:5173), we run the Electron
+// SHELL against the live dev stack instead of the packaged one: the renderer is
+// the Vite HMR server (so edits hot-reload), and Vite proxies /api to a
+// `manage.py runserver` on :8000 — NO PyInstaller freeze, NO built client.
+// Filesystem IPC (window.panddaDesktop → ingest_path, native pickers) works
+// unchanged, since the preload is attached regardless of the loaded URL. Gated
+// on the env var, so the packaged app (app.isPackaged) is never affected.
+const DEV_URL = process.env.PANDDA_DEV_URL || "";
+
 // --- persisted config (tiny JSON in userData; no electron-store dep) ---------
 // Only one setting so far: dataDir — where the backend writes the SQLite DB,
 // refinement/job outputs, and zip-imported data. Kept deliberately minimal so
@@ -224,6 +234,31 @@ async function waitForBackend(port, { tries = 60, delayMs = 500 } = {}) {
   throw new Error(`backend did not become ready on port ${port} in time`);
 }
 
+// Dev: poll the Vite dev server root until it answers, so launching Electron
+// before Vite has finished starting shows the app rather than a blank
+// connection-refused page (no wait-on dependency needed).
+function probeUrl(url) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: 1500 }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function waitForUrl(url, { tries = 120, delayMs = 500 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    if (await probeUrl(url)) return;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error(`dev server ${url} did not become reachable in time`);
+}
+
 // --- spawn the backend -------------------------------------------------------
 async function startBackend() {
   backendPort = await freePort();
@@ -309,7 +344,10 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  win.loadURL(`http://127.0.0.1:${backendPort}/`);
+  // Dev: load the Vite HMR server (hot reload) and pop DevTools; otherwise the
+  // backend-served built client at its localhost port.
+  win.loadURL(DEV_URL || `http://127.0.0.1:${backendPort}/`);
+  if (DEV_URL) win.webContents.openDevTools({ mode: "detach" });
   return win;
 }
 
@@ -433,7 +471,14 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     try {
-      await startBackend();
+      // Dev: don't spawn the frozen backend — wait for the Vite dev server
+      // (Django runserver is the user's separate process). Packaged/prod:
+      // spawn + await the bundled backend binary.
+      if (DEV_URL) {
+        await waitForUrl(DEV_URL);
+      } else {
+        await startBackend();
+      }
     } catch (err) {
       dialog.showErrorBox("Failed to start", String(err && err.message || err));
       app.quit();
