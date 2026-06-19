@@ -3,9 +3,10 @@ import {
   combineReducers,
   type Action,
 } from "@reduxjs/toolkit";
-// Moorhen 0.23 exposes a single combined reducer map. If this import fails with
-// a missing 'generalStates', clear node_modules/.vite and restart vite.
-import { MoorhenStoreReducers } from "moorhen";
+// Moorhen exposes a single combined reducer map (the react-lib entry in 1.0).
+// If this import fails with a missing 'generalStates', clear node_modules/.vite
+// and restart vite.
+import { MoorhenStoreReducers } from "moorhen/react-lib";
 
 if (!MoorhenStoreReducers || !("generalStates" in MoorhenStoreReducers)) {
   throw new Error(

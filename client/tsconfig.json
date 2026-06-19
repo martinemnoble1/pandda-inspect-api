@@ -6,6 +6,16 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    // Moorhen 1.0's package.json `exports` map has no `./types/*` key, so under
+    // `bundler` resolution `moorhen/types/moorhen` / `moorhen/types/mgWebGL`
+    // (the still-shipped, deprecated ambient namespaces) no longer resolve.
+    // Point TS straight at the physical .d.ts files. The bundler never sees
+    // these type-only imports (erased pre-bundle), so no Vite change is needed.
+    // See the Moorhen 0.23->1.0 migration guide (module-resolution gotcha).
+    "baseUrl": ".",
+    "paths": {
+      "moorhen/types/*": ["./node_modules/moorhen/types/*"]
+    },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

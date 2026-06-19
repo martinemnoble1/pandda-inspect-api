@@ -1,9 +1,9 @@
 /**
- * Moorhen 0.23.1-alpha.0 has an incomplete/loose type surface for a few things
- * we use (setActiveMap action, MoorhenMap/Molecule constructor arities, contour
- * control, glRef.setOriginAndZoomAnimated). Rather than fight the alpha's .d.ts,
- * we funnel those through thin, explicitly-typed wrappers here. Tighten once the
- * upstream types stabilise.
+ * Moorhen 1.0.0-alpha.3 still has an incomplete/loose type surface for a few
+ * things we use (setActiveMap action, MoorhenMap/Molecule constructor arities,
+ * contour control, glRef.setOriginAndZoomAnimated). Rather than fight the
+ * alpha's .d.ts, we funnel those through thin, explicitly-typed wrappers here.
+ * Tighten once the upstream types stabilise.
  *
  * NOTE on constructor signatures: ground truth is the working MoorhenPanddaApp
  * prototype (same tgz), which constructs:
@@ -22,7 +22,7 @@ import {
   setRequestDrawScene as _setRequestDrawScene,
   showMap as _showMap,
   hideMap as _hideMap,
-} from "moorhen";
+} from "moorhen/react-lib";
 
 // Loosely-typed handles. `any` is deliberate and localised to this shim.
 const MoleculeCtor = _Molecule as unknown as new (
