@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { addMap, addMolecule, removeMap, removeMolecule } from "moorhen";
+import {
+  addMap,
+  addMolecule,
+  removeMap,
+  removeMolecule,
+} from "moorhen/react-lib";
 import type { moorhen } from "moorhen/types/moorhen";
 import {
   Accordion,

@@ -5,9 +5,10 @@ import { useDispatch, useSelector } from "react-redux";
 import {
   MoorhenContainer,
   MoorhenInstanceProvider,
+  MoorhenMenuSystem,
   setShownSidePanel,
-} from "moorhen";
-import type { MoorhenPanel } from "moorhen";
+} from "moorhen/react-lib";
+import type { MoorhenPanel } from "moorhen/react-lib";
 import type { webGL } from "moorhen/types/mgWebGL";
 import type { moorhen } from "moorhen/types/moorhen";
 import store, { resetMoorhenStore } from "../store";
@@ -119,8 +120,16 @@ export function InspectPage() {
       : {}),
   };
 
+  // Moorhen 1.0 moved per-instance state into a React context, and
+  // MoorhenInstanceProvider now REQUIRES a menuSystem (it builds
+  // `new MoorhenInstance(ref, menuSystem)` from it). One per provider; memoise
+  // so it isn't rebuilt each render. We manage our own store (store.ts), so we
+  // wire the provider directly rather than via MoorhenProvider (which would
+  // create a second, un-memoised store). See migration guide §2.
+  const menuSystem = useMemo(() => new MoorhenMenuSystem(), []);
+
   return (
-    <MoorhenInstanceProvider>
+    <MoorhenInstanceProvider menuSystem={menuSystem}>
       <div style={{ position: "absolute", inset: 0 }}>
         <MoorhenContainer {...collectedProps} />
       </div>

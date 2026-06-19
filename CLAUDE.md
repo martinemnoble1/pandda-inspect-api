@@ -125,8 +125,12 @@ wander ~20Å across runs).
 
 ## Moorhen integration — THE big lesson: Moorhen is Redux-driven
 
-The client embeds Moorhen 0.23 (real source for reference:
-`~/Developer/emsdk/Moorhen/baby-gru/src`). The hardest-won, most reusable lesson:
+The client embeds Moorhen 1.0 (`file:moorhen-1.0.0-alpha.3-*.tgz`; real source
+for reference: `~/Developer/emsdk/Moorhen/baby-gru/src`). Imports come from the
+`moorhen/react-lib` entry (1.0 has an `exports` map; bare `from "moorhen"` no
+longer resolves), and `<MoorhenInstanceProvider>` now requires a `menuSystem={new
+MoorhenMenuSystem()}` prop — see InspectPage. The hardest-won, most reusable
+lesson still holds:
 
 > **Camera origin, map contour level, and map registration are all driven by the
 > Redux store. Mutating the imperative `glRef.current.*` / `map.*` properties
