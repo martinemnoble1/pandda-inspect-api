@@ -16,6 +16,19 @@ def _wipe_historical_data(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # NON-ATOMIC on purpose (Postgres). The _wipe_historical_data RunPython
+    # below issues cascading DELETEs, which queue *deferred* constraint-trigger
+    # events on inspect_api_event. Postgres then refuses the ALTER TABLE ops
+    # that follow ("cannot ALTER TABLE because it has pending trigger events")
+    # if they share the transaction. SQLite doesn't enforce this, so dev never
+    # caught it. Running non-atomic makes the wipe autocommit (clearing the
+    # pending events) before the schema ops run. The wipe is the first op and
+    # is itself idempotent (delete-all), and this migration deliberately blats
+    # all historical analysis data anyway (re-ingested from disk) — so a
+    # mid-way failure is recoverable by dropping/redoing, the usual atomic=False
+    # caveat doesn't bite here.
+    atomic = False
+
     dependencies = [
         ('inspect_api', '0016_event_detection_centroid'),
     ]
