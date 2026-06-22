@@ -206,6 +206,7 @@ boot against an already-migrated DB (the idempotent re-run is a no-op).
 | `PANDDA_HOST` | bind address — set `0.0.0.0` in a container (default `127.0.0.1`) |
 | `PANDDA_PORT` | listen port (default `8000`) |
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` — the multi-tenant DB. **Unset ⇒ SQLite** at `PANDDA_DB_PATH` (fine for single-replica/demo; mount a volume) |
+| `PANDDA_DB_*` | alternative to `DATABASE_URL`: assemble Postgres from components so the password is its own secret (a Container App `secretRef` → Key Vault ref) and no full-URL secret is minted. `PANDDA_DB_HOST` (presence selects this branch), `PANDDA_DB_USER` (both required); `PANDDA_DB_PORT` (5432), `PANDDA_DB_NAME` (`reinspect`), `PANDDA_DB_PASSWORD` (`""`), `PANDDA_DB_SSLMODE` (`require`). Precedence: `DATABASE_URL` > `PANDDA_DB_*` > SQLite |
 | `PANDDA_DATA_ROOT` / `PANDDA_JOBS_ROOT` | the mounted projects share (e.g. `/mnt/projects`) for artifacts + job/run workdirs |
 
 **Auth (opt-in; see §1)** — runtime (backend): `PANDDA_AUTH_BACKEND=ccp4i2`,

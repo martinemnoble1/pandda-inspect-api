@@ -74,6 +74,21 @@ if _DATABASE_URL:
     DATABASES["default"] = dj_database_url.parse(
         _DATABASE_URL, conn_max_age=600
     )
+elif os.environ.get("PANDDA_DB_HOST"):
+    # Cloud Postgres assembled from components, so the password arrives as its
+    # own env var (a Container App secretRef -> Key Vault reference) rather than
+    # being baked into a full-URL secret. Precedence: DATABASE_URL > components
+    # > SQLite.
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "HOST": os.environ["PANDDA_DB_HOST"],
+        "PORT": os.environ.get("PANDDA_DB_PORT", "5432"),
+        "NAME": os.environ.get("PANDDA_DB_NAME", "reinspect"),
+        "USER": os.environ["PANDDA_DB_USER"],
+        "PASSWORD": os.environ.get("PANDDA_DB_PASSWORD", ""),
+        "CONN_MAX_AGE": 600,
+        "OPTIONS": {"sslmode": os.environ.get("PANDDA_DB_SSLMODE", "require")},
+    }
 
 # Where ingested PanDDA project trees live, so the API can stream artifacts.
 # Per-project ``source_root`` (set at ingest) is the primary resolver; this is
